@@ -3,8 +3,8 @@ export interface ReadestRuntimeConfig {
   supabaseAnonKey?: string;
   apiBaseUrl?: string;
   objectStorageType?: string;
-  storageFixedQuota?: number;
-  translationFixedQuota?: number;
+  storageLimitBytes?: number;
+  translationDailyLimit?: number;
 }
 
 declare global {
@@ -32,14 +32,18 @@ export const getServerRuntimeConfig = (): ReadestRuntimeConfig => ({
   // the published image can be configured without rebuilding.
   objectStorageType:
     process.env['OBJECT_STORAGE_TYPE'] ?? process.env['NEXT_PUBLIC_OBJECT_STORAGE_TYPE'],
-  storageFixedQuota: (() => {
+  storageLimitBytes: (() => {
     const raw =
-      process.env['STORAGE_FIXED_QUOTA'] ?? process.env['NEXT_PUBLIC_STORAGE_FIXED_QUOTA'];
+      process.env['STORAGE_LIMIT_BYTES'] ??
+      process.env['STORAGE_FIXED_QUOTA'] ??
+      process.env['NEXT_PUBLIC_STORAGE_FIXED_QUOTA'];
     return raw ? parseInt(raw, 10) : undefined;
   })(),
-  translationFixedQuota: (() => {
+  translationDailyLimit: (() => {
     const raw =
-      process.env['TRANSLATION_FIXED_QUOTA'] ?? process.env['NEXT_PUBLIC_TRANSLATION_FIXED_QUOTA'];
+      process.env['TRANSLATION_DAILY_LIMIT'] ??
+      process.env['TRANSLATION_FIXED_QUOTA'] ??
+      process.env['NEXT_PUBLIC_TRANSLATION_FIXED_QUOTA'];
     return raw ? parseInt(raw, 10) : undefined;
   })(),
 });

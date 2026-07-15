@@ -121,7 +121,7 @@ So the rough split is:
 - `src/app/s`: share landing UI
 - `src/app/send`: send/import UI
 - `src/app/updater`: updater UI
-- `src/app/user`: account/subscription/settings UI
+- `src/app/user`: account, cloud storage, and sync settings UI
 
 So `src/app` is mostly application UI, with one explicitly server-only subtree: `src/app/api`, plus the runtime-config route.
 

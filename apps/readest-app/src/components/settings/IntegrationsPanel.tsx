@@ -19,13 +19,11 @@ import { useEnv } from '@/context/EnvContext';
 import { useAuth } from '@/context/AuthContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useKeyDownActions } from '@/hooks/useKeyDownActions';
-import { useQuotaStats } from '@/hooks/useQuotaStats';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useCustomOPDSStore } from '@/store/customOPDSStore';
 import { useFileSyncStore } from '@/store/fileSyncStore';
 import { CatalogManager } from '@/app/opds/components/CatalogManager';
 import { saveSysSettings } from '@/helpers/settings';
-import { isCloudSyncAllowed } from '@/utils/access';
 import { isWebAppPlatform } from '@/services/environment';
 import { getGoogleWebClientId } from '@/services/sync/providers/gdrive/buildGoogleDriveProvider';
 import { getMicrosoftClientId } from '@/services/sync/providers/onedrive/buildOneDriveProvider';
@@ -42,7 +40,6 @@ import { persistActiveCloudProvider } from './integrations/cloudSync';
 import { getReadestCloudRowStatus, getThirdPartyRowStatus } from './integrations/cloudSyncStatus';
 import {
   getCloudSyncProvider,
-  resolveCloudSyncGate,
   type CloudSyncProviderKind,
 } from '@/services/sync/cloudSyncProvider';
 import type { FileSyncBackendKind } from '@/services/sync/file/providerRegistry';
@@ -93,12 +90,6 @@ const IntegrationsPanel: React.FC = () => {
   const gdriveLastError = useFileSyncStore((s) => s.lastErrorByKind.gdrive);
   const s3LastError = useFileSyncStore((s) => s.lastErrorByKind.s3);
   const onedriveLastError = useFileSyncStore((s) => s.lastErrorByKind.onedrive);
-  // Third-party cloud sync will be a premium feature (any paid plan), but it is
-  // temporarily UNGATED while the feature stabilises — `isCloudSyncAllowed`
-  // returns true for every plan until `CLOUD_SYNC_REQUIRES_PREMIUM` is flipped
-  // back on. The `?? 'free'` keeps the (re-gated) loading state non-premium.
-  const { userProfilePlan } = useQuotaStats();
-  const isCloudSyncPremium = isCloudSyncAllowed(userProfilePlan ?? 'free');
 
   const [subPage, setSubPage] = useState<SubPage>(null);
 
@@ -130,19 +121,6 @@ const IntegrationsPanel: React.FC = () => {
   // stick to the next open. Recognised values match the SubPage union.
   useEffect(() => {
     if (!requestedSubPage) return;
-    const isCloudRequest =
-      requestedSubPage === 'webdav' ||
-      requestedSubPage === 'gdrive' ||
-      requestedSubPage === 's3' ||
-      requestedSubPage === 'onedrive' ||
-      requestedSubPage === 'cloudsync';
-    // Cloud-sync sub-pages are premium-gated. If the plan is still loading, wait
-    // (don't consume the request); once known, only honor it for paid plans.
-    if (isCloudRequest && !isCloudSyncPremium) {
-      if (userProfilePlan === undefined) return;
-      setRequestedSubPage(null);
-      return;
-    }
     if (
       requestedSubPage === 'kosync' ||
       requestedSubPage === 'webdav' ||
@@ -160,7 +138,7 @@ const IntegrationsPanel: React.FC = () => {
       setSubPage('gdrive');
     }
     setRequestedSubPage(null);
-  }, [requestedSubPage, setRequestedSubPage, isCloudSyncPremium, userProfilePlan]);
+  }, [requestedSubPage, setRequestedSubPage]);
 
   // Sub-page wrapper matches the list-view's `my-4 w-full` so the
   // SubPageHeader's "Integrations" label lands at the exact same Y position
@@ -322,7 +300,7 @@ const IntegrationsPanel: React.FC = () => {
         <BoxedList>
           <NavigationRow
             title={_('Account and Storage')}
-            status={_('Manage your plan and stored files')}
+            status={_('Manage stored files and account settings')}
             onClick={() => navigateToProfile(router)}
           />
         </BoxedList>
@@ -375,14 +353,12 @@ const IntegrationsPanel: React.FC = () => {
   const cloudProvider = getCloudSyncProvider(settings);
   const activeCloudKind: FileSyncBackendKind | null =
     cloudProvider === 'readest' ? null : cloudProvider;
-  const cloudGate = resolveCloudSyncGate(settings, userProfilePlan ?? 'free');
   const webdavConfigured = !!(settings.webdav?.serverUrl && settings.webdav?.username);
   const gdriveConfigured = !!settings.googleDrive?.accountLabel;
   const webdavStatus = getThirdPartyRowStatus(_, {
     enabled: !!settings.webdav?.enabled,
     configured: webdavConfigured,
     syncing: isWebDAVSyncing,
-    paused: cloudGate.paused && cloudProvider === 'webdav',
     lastError: webdavLastError,
     syncBooks: settings.webdav?.syncBooks ?? false,
   });
@@ -390,7 +366,6 @@ const IntegrationsPanel: React.FC = () => {
     enabled: !!settings.googleDrive?.enabled,
     configured: gdriveConfigured,
     syncing: isGDriveSyncing,
-    paused: cloudGate.paused && cloudProvider === 'gdrive',
     lastError: gdriveLastError,
     syncBooks: settings.googleDrive?.syncBooks ?? false,
   });
@@ -404,7 +379,6 @@ const IntegrationsPanel: React.FC = () => {
     enabled: !!settings.s3?.enabled,
     configured: s3Configured,
     syncing: isS3Syncing,
-    paused: cloudGate.paused && cloudProvider === 's3',
     lastError: s3LastError,
     syncBooks: settings.s3?.syncBooks ?? false,
   });
@@ -413,13 +387,11 @@ const IntegrationsPanel: React.FC = () => {
     enabled: !!settings.onedrive?.enabled,
     configured: onedriveConfigured,
     syncing: isOneDriveSyncing,
-    paused: cloudGate.paused && cloudProvider === 'onedrive',
     lastError: onedriveLastError,
     syncBooks: settings.onedrive?.syncBooks ?? false,
   });
   const readestStatus = getReadestCloudRowStatus(_, {
     signedIn: !!user,
-    planLoading: userProfilePlan === undefined,
     selected: cloudProvider === 'readest',
   });
 
@@ -483,9 +455,6 @@ const IntegrationsPanel: React.FC = () => {
               onOpen={() => (user ? setSubPage('readest-cloud') : navigateToLogin(router))}
               activateLabel={_('Use Readest Cloud')}
             />
-            {/* Third-party providers are premium: every row carries the tier
-                badge; on a free plan the radio is disabled and opening a row
-                routes to the upgrade page instead of the config sub-page. */}
             {(appService?.isDesktopApp ||
               appService?.isAndroidApp ||
               appService?.isIOSApp ||
@@ -495,13 +464,10 @@ const IntegrationsPanel: React.FC = () => {
                 icon={RiGoogleLine}
                 title={_('Google Drive')}
                 status={gdriveStatus}
-                badge={_('Premium')}
                 isActive={activeCloudKind === 'gdrive'}
-                canActivate={isCloudSyncPremium && gdriveConfigured}
+                canActivate={gdriveConfigured}
                 onActivate={() => activateCloudProvider('gdrive')}
-                onOpen={() =>
-                  isCloudSyncPremium ? setSubPage('gdrive') : navigateToProfile(router)
-                }
+                onOpen={() => setSubPage('gdrive')}
                 activateLabel={_('Use Google Drive')}
               />
             )}
@@ -509,22 +475,20 @@ const IntegrationsPanel: React.FC = () => {
               icon={RiCloudLine}
               title={_('WebDAV')}
               status={webdavStatus}
-              badge={_('Premium')}
               isActive={activeCloudKind === 'webdav'}
-              canActivate={isCloudSyncPremium && webdavConfigured}
+              canActivate={webdavConfigured}
               onActivate={() => activateCloudProvider('webdav')}
-              onOpen={() => (isCloudSyncPremium ? setSubPage('webdav') : navigateToProfile(router))}
+              onOpen={() => setSubPage('webdav')}
               activateLabel={_('Use WebDAV')}
             />
             <CloudProviderRow
               icon={RiDatabase2Line}
               title={_('S3 Storage')}
               status={s3Status}
-              badge={_('Premium')}
               isActive={activeCloudKind === 's3'}
-              canActivate={isCloudSyncPremium && s3Configured}
+              canActivate={s3Configured}
               onActivate={() => activateCloudProvider('s3')}
-              onOpen={() => (isCloudSyncPremium ? setSubPage('s3') : navigateToProfile(router))}
+              onOpen={() => setSubPage('s3')}
               activateLabel={_('Use S3')}
             />
             {(appService?.isDesktopApp ||
@@ -536,13 +500,10 @@ const IntegrationsPanel: React.FC = () => {
                 icon={RiMicrosoftLine}
                 title={_('OneDrive')}
                 status={onedriveStatus}
-                badge={_('Premium')}
                 isActive={activeCloudKind === 'onedrive'}
-                canActivate={isCloudSyncPremium && onedriveConfigured}
+                canActivate={onedriveConfigured}
                 onActivate={() => activateCloudProvider('onedrive')}
-                onOpen={() =>
-                  isCloudSyncPremium ? setSubPage('onedrive') : navigateToProfile(router)
-                }
+                onOpen={() => setSubPage('onedrive')}
                 activateLabel={_('Use OneDrive')}
               />
             )}
@@ -639,8 +600,6 @@ interface CloudProviderRowProps {
   onOpen: () => void;
   /** Accessible label for the activate radio (e.g. "Use WebDAV"). */
   activateLabel: string;
-  /** End-aligned tier chip (e.g. "Premium") — uniform column before the radio. */
-  badge?: string;
 }
 
 /**
@@ -658,7 +617,6 @@ const CloudProviderRow: React.FC<CloudProviderRowProps> = ({
   onActivate,
   onOpen,
   activateLabel,
-  badge,
 }) => {
   return (
     <div className='group flex w-full items-center gap-3 px-4 py-3'>
@@ -685,7 +643,6 @@ const CloudProviderRow: React.FC<CloudProviderRowProps> = ({
           <span className='text-base-content/65 truncate text-[0.85em]'>{status}</span>
         </div>
       </button>
-      {badge && <span className='badge badge-sm badge-ghost shrink-0'>{badge}</span>}
       <input
         type='radio'
         name='cloud-sync-active'

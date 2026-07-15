@@ -389,10 +389,10 @@ describe('cancelled bucket accounting', () => {
   });
 });
 
-describe('quota failure handling', () => {
-  test('quota 403 fails immediately with zero retries', async () => {
+describe('deployment storage limit failure handling', () => {
+  test('storage limit 403 fails immediately with zero retries', async () => {
     const appService = makeAppService({
-      uploadBook: vi.fn().mockRejectedValue(new Error('Insufficient storage quota')),
+      uploadBook: vi.fn().mockRejectedValue(new Error('Storage limit exceeded')),
     });
     const book = makeBook();
     await initManager(appService, [book]);
@@ -407,9 +407,9 @@ describe('quota failure handling', () => {
     expect(appService['uploadBook']).toHaveBeenCalledTimes(1);
   });
 
-  test('a batch of quota failures produces one summary toast, not one per book', async () => {
+  test('a batch of storage limit failures produces one summary toast, not one per book', async () => {
     const appService = makeAppService({
-      uploadBook: vi.fn().mockRejectedValue(new Error('Insufficient storage quota')),
+      uploadBook: vi.fn().mockRejectedValue(new Error('Storage limit exceeded')),
     });
     const books = [makeBook(), makeBook({ hash: 'hash2' }), makeBook({ hash: 'hash3' })];
     await initManager(appService, books);
@@ -422,13 +422,13 @@ describe('quota failure handling', () => {
         event === 'toast' &&
         String((payload as { message?: string })?.message ?? '')
           .toLowerCase()
-          .includes('quota'),
+          .includes('storage limit'),
     );
     expect(dispatched).toHaveLength(1);
     expect(String((dispatched[0]![1] as { message: string }).message)).toContain('3');
   });
 
-  test('non-quota errors keep the existing retry behavior', async () => {
+  test('other errors keep the existing retry behavior', async () => {
     const appService = makeAppService({
       uploadBook: vi.fn().mockRejectedValue(new Error('network boom')),
     });

@@ -298,24 +298,26 @@ const StorageManager = () => {
               </div>
             </div>
             <div>
-              <div className='text-base-content/60 text-sm'>{_('Quota')}</div>
+              <div className='text-base-content/60 text-sm'>{_('Limit')}</div>
               <div className='text-base-content text-xl font-semibold'>
-                {formatFileSize(stats.quota)}
+                {stats.limit === null ? _('Unlimited') : formatFileSize(stats.limit)}
               </div>
             </div>
             <div>
               <div className='text-base-content/60 text-sm'>{_('Used')}</div>
               <div className='text-base-content text-xl font-semibold'>
-                {stats.usagePercentage}%
+                {stats.usagePercentage === null ? '—' : `${stats.usagePercentage}%`}
               </div>
             </div>
           </div>
-          <div className='bg-base-300 mt-4 h-2 w-full overflow-hidden rounded-full'>
-            <div
-              className='bg-primary h-full transition-all'
-              style={{ width: `${Math.min(stats.usagePercentage, 100)}%` }}
-            />
-          </div>
+          {stats.usagePercentage !== null && (
+            <div className='bg-base-300 mt-4 h-2 w-full overflow-hidden rounded-full'>
+              <div
+                className='bg-primary h-full transition-all'
+                style={{ width: `${Math.min(stats.usagePercentage, 100)}%` }}
+              />
+            </div>
+          )}
         </div>
       ) : (
         <div className='bg-base-100 border-base-300 rounded-lg border p-4'>

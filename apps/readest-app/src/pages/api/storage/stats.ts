@@ -1,14 +1,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createSupabaseAdminClient } from '@/utils/supabase';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
-import { validateUserAndToken, getStoragePlanData } from '@/utils/access';
+import { validateUserAndToken, getStoragePolicyData } from '@/utils/access';
 
 interface StorageStats {
   totalFiles: number;
   totalSize: number;
   usage: number;
-  quota: number;
-  usagePercentage: number;
+  limit: number | null;
+  usagePercentage: number | null;
   byBookHash: Array<{
     bookHash: string | null;
     fileCount: number;
@@ -62,9 +62,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const totalFiles = allFileStats.length;
     const totalSize = allFileStats.reduce((sum, file) => sum + (file.file_size || 0), 0);
 
-    // Get storage plan data
-    const { usage, quota } = getStoragePlanData(token);
-    const usagePercentage = quota > 0 ? Math.round((usage / quota) * 100) : 0;
+    const { limit } = getStoragePolicyData(token);
+    const usage = totalSize;
+    const usagePercentage = limit === null ? null : Math.round((usage / limit) * 100);
 
     // Get stats grouped by book_hash
     const { data: bookHashStats, error: bookHashError } = await supabase.rpc(
@@ -129,7 +129,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       totalFiles,
       totalSize,
       usage,
-      quota,
+      limit,
       usagePercentage,
       byBookHash,
     };

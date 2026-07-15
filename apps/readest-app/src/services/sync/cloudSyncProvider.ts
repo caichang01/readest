@@ -1,6 +1,4 @@
 import type { SystemSettings } from '@/types/settings';
-import type { UserPlan } from '@/types/quota';
-import { isCloudSyncAllowed } from '@/utils/access';
 import type { FileSyncBackendKind } from '@/services/sync/file/providerRegistry';
 
 /**
@@ -12,24 +10,12 @@ import type { FileSyncBackendKind } from '@/services/sync/file/providerRegistry'
  *
  * The selection is DERIVED from the existing per-device enabled flags —
  * there is no separate persisted field, so it inherits the device-local
- * semantics of `webdav.enabled` / `googleDrive.enabled` and needs no
+ * semantics of each provider's `enabled` flag and needs no
  * migration. `withActiveCloudProvider` keeps the flags mutually
  * exclusive; if both are ever enabled (hand-edited or restored
  * settings), WebDAV wins deterministically.
  */
 export type CloudSyncProviderKind = 'readest' | FileSyncBackendKind;
-
-export interface CloudSyncGate {
-  provider: CloudSyncProviderKind;
-  /**
-   * True when a third-party provider is selected but cloud sync is not
-   * allowed for the user's plan. Paused means paused: Readest Cloud
-   * uploads do NOT silently resume (that would push a possibly-private
-   * library to Readest servers without consent and reintroduce the
-   * #4959 quota path); the UI surfaces the paused state instead.
-   */
-  paused: boolean;
-}
 
 /** Settings slice key for a third-party backend kind. */
 export const settingsKeyForBackend = (
@@ -62,36 +48,8 @@ export const getCloudSyncProvider = (
           : 'readest';
 
 /**
- * `isCloudSyncAllowed` needs the UserPlan, which comes from the async
- * auth JWT — non-React modules (transferManager, syncCategories) cannot
- * resolve it synchronously. The plan-resolution flow (auth / quota
- * refresh) writes the latest plan here; gate checks read it back.
- * Defaults to 'free', the most restrictive plan, so a gate evaluated
- * before the first auth resolution can only be too cautious, never too
- * permissive.
- */
-let cachedUserPlan: UserPlan = 'free';
-
-export const setCachedUserPlan = (plan: UserPlan | undefined): void => {
-  cachedUserPlan = plan ?? 'free';
-};
-
-export const getCachedUserPlan = (): UserPlan => cachedUserPlan;
-
-export const resolveCloudSyncGate = (
-  settings: SystemSettings | null | undefined,
-  plan: UserPlan = cachedUserPlan,
-): CloudSyncGate => {
-  const provider = getCloudSyncProvider(settings);
-  if (provider !== 'readest' && !isCloudSyncAllowed(plan)) {
-    return { provider, paused: true };
-  }
-  return { provider, paused: false };
-};
-
-/**
  * One-time upgrade migration helper (appService migrate20260706): users
- * who already had WebDAV/Drive enabled before provider selection shipped
+ * who already had a third-party backend enabled before provider selection shipped
  * become "third-party selected" on upgrade, which gates native Readest
  * Cloud uploads off — with syncBooks at its old `false` default their
  * books would back up nowhere. Flip syncBooks on for the SELECTED
@@ -108,6 +66,10 @@ export const applySyncBooksAutoEnable = (settings: SystemSettings): boolean => {
     settings.googleDrive = { ...settings.googleDrive, syncBooks: true };
     return true;
   }
+  if (provider === 's3' && settings.s3 && !settings.s3.syncBooks) {
+    settings.s3 = { ...settings.s3, syncBooks: true };
+    return true;
+  }
   if (provider === 'onedrive' && settings.onedrive && !settings.onedrive.syncBooks) {
     settings.onedrive = { ...settings.onedrive, syncBooks: true };
     return true;
@@ -121,7 +83,5 @@ export const applySyncBooksAutoEnable = (settings: SystemSettings): boolean => {
  * third-party provider — active or paused — means no Readest Cloud
  * uploads.
  */
-export const isReadestCloudStorageActive = (
-  settings: SystemSettings | null | undefined,
-  plan?: UserPlan,
-): boolean => resolveCloudSyncGate(settings, plan).provider === 'readest';
+export const isReadestCloudStorageActive = (settings: SystemSettings | null | undefined): boolean =>
+  getCloudSyncProvider(settings) === 'readest';

@@ -4,11 +4,9 @@
  * backends are enabled and build each one by kind, never naming WebDAV or Drive
  * directly.
  *
- * The settings view here is intentionally narrow — just the `enabled` flags plus
- * the WebDAV transport config — so this PR can land the seam without depending on
- * the full Google Drive settings shape and Integrations UI (which arrive with the
- * settings-UI phase). Drive builds itself from the env-baked client id + the
- * keychain token, so it needs no settings to construct.
+ * The settings view is intentionally narrow: connection fields for credentialed
+ * providers and enabled flags for OAuth providers. Drive providers assemble
+ * their tokens from secure storage, so they need no credential fields here.
  */
 import type { FileSyncProvider } from './provider';
 import type { S3Settings, WebDAVSettings } from '@/types/settings';
@@ -39,6 +37,29 @@ export const getEnabledFileSyncBackends = (
   return enabled;
 };
 
+/** Whether a backend has enough local configuration to start syncing. */
+export const isFileSyncBackendConfigured = (
+  kind: FileSyncBackendKind,
+  settings: FileSyncBackendsSettings,
+): boolean => {
+  if (kind === 'webdav') {
+    const config = settings.webdav;
+    return !!(config?.enabled && config.serverUrl && config.username);
+  }
+  if (kind === 's3') {
+    const config = settings.s3;
+    return !!(
+      config?.enabled &&
+      config.endpoint &&
+      config.bucket &&
+      config.accessKeyId &&
+      config.secretAccessKey
+    );
+  }
+  if (kind === 'onedrive') return !!settings.onedrive?.enabled;
+  return !!settings.googleDrive?.enabled;
+};
+
 /**
  * One provider is memoised per connection key and shared by every surface
  * (the reader's per-book sync, the library auto-sync, Sync now / pull to
@@ -53,7 +74,7 @@ export const getEnabledFileSyncBackends = (
  */
 let cachedProvider: { key: string; provider: FileSyncProvider } | null = null;
 
-const providerCacheKey = (
+export const fileSyncProviderConfigKey = (
   kind: FileSyncBackendKind,
   settings: FileSyncBackendsSettings,
 ): string => {
@@ -82,7 +103,7 @@ export const createFileSyncProvider = async (
   kind: FileSyncBackendKind,
   settings: FileSyncBackendsSettings,
 ): Promise<FileSyncProvider | null> => {
-  const key = providerCacheKey(kind, settings);
+  const key = fileSyncProviderConfigKey(kind, settings);
   if (cachedProvider?.key === key) return cachedProvider.provider;
   const provider =
     kind === 'webdav'

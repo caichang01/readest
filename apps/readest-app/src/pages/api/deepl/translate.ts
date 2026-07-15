@@ -2,11 +2,7 @@ import crypto from 'crypto';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
-import {
-  getDailyTranslationPlanData,
-  getSubscriptionPlan,
-  validateUserAndToken,
-} from '@/utils/access';
+import { getDailyTranslationPolicyData, validateUserAndToken } from '@/utils/access';
 import { ErrorCodes } from '@/services/translators';
 import { UsageStatsManager } from '@/utils/usage';
 
@@ -39,31 +35,25 @@ const generateCacheKey = (text: string, sourceLang: string, targetLang: string):
   return `tr:${hash}`;
 };
 
-const checkDailyUsage = async (userId: string, token: string, chars: number) => {
-  const { quota: dailyQuota } = getDailyTranslationPlanData(token);
+const checkDailyUsage = async (userId: string, chars: number) => {
+  const { limit: dailyLimit } = getDailyTranslationPolicyData();
   const dailyUsage = await UsageStatsManager.getCurrentUsage(userId, 'translation_chars', 'daily');
 
-  if (dailyQuota <= dailyUsage + chars) {
+  if (dailyLimit !== null && dailyUsage + chars > dailyLimit) {
     throw new Error(ErrorCodes.DAILY_QUOTA_EXCEEDED);
   }
   return dailyUsage;
 };
 
-const updateDailyUsage = async (
-  userId: string | undefined,
-  token: string | undefined,
-  incrementUsage: number,
-) => {
-  if (!userId || !token) return 0;
+const updateDailyUsage = async (userId: string | undefined, incrementUsage: number) => {
+  if (!userId) return 0;
 
   try {
-    const userPlan = getSubscriptionPlan(token);
     const newUsage = await UsageStatsManager.trackUsage(
       userId,
       'translation_chars',
       incrementUsage,
       {
-        plan_type: userPlan,
         source: 'deepl_api',
       },
     );
@@ -96,12 +86,8 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
   const deepFreeApiUrl = DEEPL_FREE_API || DEFAULT_DEEPL_FREE_API;
   const deeplProApiUrl = DEEPL_PRO_API || DEFAULT_DEEPL_PRO_API;
 
-  let deeplApiUrl = deepFreeApiUrl;
-  let userPlan = 'free';
-  if (user && token) {
-    userPlan = getSubscriptionPlan(token);
-    if (userPlan === 'pro') deeplApiUrl = deeplProApiUrl;
-  }
+  const hasProKeys = Boolean(process.env['DEEPL_PRO_API_KEYS']?.trim());
+  const deeplApiUrl = hasProKeys ? deeplProApiUrl : deepFreeApiUrl;
   const deeplAuthKey =
     deeplApiUrl === deeplProApiUrl
       ? getDeepLAPIKey(process.env['DEEPL_PRO_API_KEYS'])
@@ -115,6 +101,10 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
   }: { text: string[]; source_lang: string; target_lang: string; use_cache: boolean } = req.body;
 
   try {
+    if (!user || !token) return res.status(401).json({ error: ErrorCodes.UNAUTHORIZED });
+    const originalCharsCount = text.reduce((total, value) => total + value.length, 0);
+    await checkDailyUsage(user.id, originalCharsCount);
+
     const translations = await Promise.all(
       text.map(async (singleText) => {
         if (!singleText?.trim()) {
@@ -137,9 +127,6 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
           }
         }
 
-        if (!user || !token) return res.status(401).json({ error: ErrorCodes.UNAUTHORIZED });
-        await checkDailyUsage(user?.id, token, singleText.length);
-
         return await callDeepLAPI(
           singleText,
           sourceLang,
@@ -151,11 +138,9 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
         );
       }),
     );
-    const originalCharsCount = text.reduce((a, b) => a + b.length, 0);
     const translatedCharsCount = translations.reduce((a, b) => a + (b?.text.length || 0), 0);
     const newDailyUsage = await updateDailyUsage(
-      user?.id,
-      token,
+      user.id,
       originalCharsCount + translatedCharsCount,
     );
     translations.forEach((translation) => {

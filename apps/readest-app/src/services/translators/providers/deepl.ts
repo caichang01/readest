@@ -1,8 +1,7 @@
 import { getAPIBaseUrl } from '@/services/environment';
 import { stubTranslation as _ } from '@/utils/misc';
 import { ErrorCodes, TranslationProvider } from '../types';
-import { UserPlan } from '@/types/quota';
-import { getSubscriptionPlan, getTranslationQuota } from '@/utils/access';
+import { getTranslationDailyLimit } from '@/utils/access';
 import { normalizeToShortLang } from '@/utils/lang';
 import { saveDailyUsage } from '../utils';
 
@@ -26,9 +25,7 @@ export const deeplProvider: TranslationProvider = {
       'Content-Type': 'application/json',
     };
 
-    let userPlan: UserPlan = 'free';
     if (token) {
-      userPlan = getSubscriptionPlan(token);
       headers['Authorization'] = `Bearer ${token}`;
     }
 
@@ -44,14 +41,14 @@ export const deeplProvider: TranslationProvider = {
       use_cache: useCache,
     });
 
-    const quota = getTranslationQuota(userPlan);
+    const dailyLimit = getTranslationDailyLimit();
     try {
       const response = await fetch(DEEPL_API_ENDPOINT, { method: 'POST', headers, body });
 
       if (!response.ok) {
         const data = await response.json();
         if (data && data.error && data.error === ErrorCodes.DAILY_QUOTA_EXCEEDED) {
-          saveDailyUsage(quota);
+          if (dailyLimit !== null) saveDailyUsage(dailyLimit);
           deeplProvider.quotaExceeded = true;
           throw new Error(ErrorCodes.DAILY_QUOTA_EXCEEDED);
         }
@@ -70,7 +67,8 @@ export const deeplProvider: TranslationProvider = {
         const translation = data.translations?.[i];
         if (translation?.daily_usage) {
           saveDailyUsage(translation.daily_usage);
-          deeplProvider.quotaExceeded = data.daily_usage >= quota;
+          deeplProvider.quotaExceeded =
+            dailyLimit !== null && translation.daily_usage >= dailyLimit;
         }
         return translation?.text || line;
       });

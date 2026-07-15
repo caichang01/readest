@@ -2,11 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
-import { useQuotaStats } from '@/hooks/useQuotaStats';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useFileSyncStore } from '@/store/fileSyncStore';
-import { isCloudSyncAllowed } from '@/utils/access';
 import { isWebAppPlatform } from '@/services/environment';
 import { hasValidWebDriveToken } from '@/services/sync/providers/gdrive/auth/webTokenStore';
 import { debounce } from '@/utils/debounce';
@@ -14,6 +12,8 @@ import { FileSyncEngine } from '@/services/sync/file/engine';
 import { createAppLocalStore } from '@/services/sync/file/appLocalStore';
 import {
   createFileSyncProvider,
+  fileSyncProviderConfigKey,
+  isFileSyncBackendConfigured,
   type FileSyncBackendKind,
 } from '@/services/sync/file/providerRegistry';
 import { getCloudSyncProvider, settingsKeyForBackend } from '@/services/sync/cloudSyncProvider';
@@ -52,43 +52,28 @@ export const useLibraryFileSync = () => {
   const settings = useSettingsStore((s) => s.settings);
   const library = useLibraryStore((s) => s.library);
   const libraryLoaded = useLibraryStore((s) => s.libraryLoaded);
-  const { userProfilePlan } = useQuotaStats();
 
   // The single active cloud provider (WebDAV and Google Drive are exclusive).
   const provider = getCloudSyncProvider(settings);
   const activeKind: FileSyncBackendKind | null = provider === 'readest' ? null : provider;
 
-  const isAllowed = isCloudSyncAllowed(userProfilePlan ?? 'free');
   const isReady = useMemo(() => {
-    if (!isAllowed) return false;
-    if (activeKind === 'webdav') {
-      const w = settings.webdav;
-      return !!(w?.enabled && w?.serverUrl && w?.username);
-    }
+    if (activeKind === null || !isFileSyncBackendConfigured(activeKind, settings)) return false;
     if (activeKind === 'gdrive') {
       // Web Drive tokens are session-scoped with no refresh; once expired,
       // every run would abort with AUTH_FAILED on the index pull. Skip the
       // auto-sync until the user reconnects (the Drive settings form shows
       // the Reconnect CTA), mirroring its disabled "Sync now".
       if (isWebAppPlatform() && !hasValidWebDriveToken()) return false;
-      return !!settings.googleDrive?.enabled;
+      return true;
     }
-    if (activeKind === 'onedrive') return !!settings.onedrive?.enabled;
-    return false;
-  }, [isAllowed, activeKind, settings.webdav, settings.googleDrive, settings.onedrive]);
+    return true;
+  }, [activeKind, settings]);
 
   // Build the engine async (Drive probes the OS keychain). Keyed on the
   // connection-relevant settings so an unrelated write (e.g. lastSyncedAt)
   // doesn't rebuild it — which for Drive would re-probe the keychain.
-  const engineKey = useMemo(() => {
-    if (activeKind === 'webdav') {
-      const w = settings.webdav;
-      return `webdav:${w?.enabled}:${w?.serverUrl}:${w?.username}:${w?.password}:${w?.rootPath}`;
-    }
-    if (activeKind === 'gdrive') return `gdrive:${settings.googleDrive?.enabled}`;
-    if (activeKind === 'onedrive') return `onedrive:${settings.onedrive?.enabled}`;
-    return 'none';
-  }, [activeKind, settings.webdav, settings.googleDrive, settings.onedrive]);
+  const engineKey = activeKind ? fileSyncProviderConfigKey(activeKind, settings) : 'none';
 
   const [engine, setEngine] = useState<FileSyncEngine | null>(null);
   useEffect(() => {

@@ -13,6 +13,7 @@ import { buildOneDriveProvider } from '@/services/sync/providers/onedrive/buildO
 import {
   createFileSyncProvider,
   getEnabledFileSyncBackends,
+  isFileSyncBackendConfigured,
   resetFileSyncProviderCache,
 } from '@/services/sync/file/providerRegistry';
 import type { FileSyncProvider } from '@/services/sync/file/provider';
@@ -58,6 +59,23 @@ describe('getEnabledFileSyncBackends', () => {
 
   test("getEnabledFileSyncBackends includes 'onedrive' when enabled", () => {
     expect(getEnabledFileSyncBackends({ onedrive: { enabled: true } })).toContain('onedrive');
+  });
+});
+
+describe('isFileSyncBackendConfigured', () => {
+  test('recognises a complete S3 configuration for library auto-sync', () => {
+    expect(isFileSyncBackendConfigured('s3', { s3 })).toBe(true);
+    expect(
+      isFileSyncBackendConfigured('s3', {
+        s3: { ...s3, secretAccessKey: '' },
+      }),
+    ).toBe(false);
+  });
+
+  test('recognises enabled WebDAV and Drive backends', () => {
+    expect(isFileSyncBackendConfigured('webdav', { webdav })).toBe(true);
+    expect(isFileSyncBackendConfigured('gdrive', { googleDrive: { enabled: true } })).toBe(true);
+    expect(isFileSyncBackendConfigured('onedrive', { onedrive: { enabled: true } })).toBe(true);
   });
 });
 
