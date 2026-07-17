@@ -5,9 +5,7 @@ import { useBookDataStore } from '@/store/bookDataStore';
 import { useReaderStore } from '@/store/readerStore';
 import { useBookProgress } from '@/store/readerProgressStore';
 import { useSettingsStore } from '@/store/settingsStore';
-import { useQuotaStats } from '@/hooks/useQuotaStats';
 import { useTranslation } from '@/hooks/useTranslation';
-import { isCloudSyncAllowed } from '@/utils/access';
 import { debounce } from '@/utils/debounce';
 import { eventDispatcher } from '@/utils/event';
 import { FileSyncEngine } from '@/services/sync/file/engine';
@@ -15,6 +13,8 @@ import { FileSyncError } from '@/services/sync/file/provider';
 import { createAppLocalStore } from '@/services/sync/file/appLocalStore';
 import {
   createFileSyncProvider,
+  fileSyncProviderConfigKey,
+  isFileSyncBackendConfigured,
   type FileSyncBackendKind,
 } from '@/services/sync/file/providerRegistry';
 import { getCloudSyncProvider, settingsKeyForBackend } from '@/services/sync/cloudSyncProvider';
@@ -141,34 +141,10 @@ export const useFileSync = (bookKey: string) => {
     [activeKind, envConfig, setSettings, saveSettings],
   );
 
-  // Third-party cloud sync will be a premium feature (the reader's auto-sync
-  // would stay off for free plans), but it is temporarily UNGATED while the
-  // feature stabilises — `isCloudSyncAllowed` returns true for every plan until
-  // `CLOUD_SYNC_REQUIRES_PREMIUM` is flipped back on.
-  const { userProfilePlan } = useQuotaStats();
-  const isPremium = isCloudSyncAllowed(userProfilePlan ?? 'free');
-
-  const isReady = useMemo(() => {
-    if (!isPremium) return false;
-    if (activeKind === 'webdav') {
-      const w = settings.webdav;
-      return !!(w?.enabled && w?.serverUrl && w?.username);
-    }
-    if (activeKind === 'gdrive') return !!settings.googleDrive?.enabled;
-    if (activeKind === 's3') {
-      const c = settings.s3;
-      return !!(c?.enabled && c?.endpoint && c?.bucket && c?.accessKeyId && c?.secretAccessKey);
-    }
-    if (activeKind === 'onedrive') return !!settings.onedrive?.enabled;
-    return false;
-  }, [
-    isPremium,
-    activeKind,
-    settings.webdav,
-    settings.googleDrive,
-    settings.s3,
-    settings.onedrive,
-  ]);
+  const isReady = useMemo(
+    () => activeKind !== null && isFileSyncBackendConfigured(activeKind, settings),
+    [activeKind, settings],
+  );
 
   const strategy = providerSettings?.strategy ?? 'silent';
   const allowPush = isReady && strategy !== 'receive';
@@ -178,19 +154,7 @@ export const useFileSync = (bookKey: string) => {
   // keychain to assemble its token store. Keyed on the connection-relevant
   // settings (not the whole settings object) so a `lastSyncedAt` write doesn't
   // rebuild it — which for Drive would re-probe the keychain on every push.
-  const engineKey = useMemo(() => {
-    if (activeKind === 'webdav') {
-      const w = settings.webdav;
-      return `webdav:${w?.enabled}:${w?.serverUrl}:${w?.username}:${w?.password}:${w?.rootPath}`;
-    }
-    if (activeKind === 'gdrive') return `gdrive:${settings.googleDrive?.enabled}`;
-    if (activeKind === 's3') {
-      const c = settings.s3;
-      return `s3:${c?.enabled}:${c?.endpoint}:${c?.region}:${c?.bucket}:${c?.accessKeyId}:${c?.secretAccessKey}`;
-    }
-    if (activeKind === 'onedrive') return `onedrive:${settings.onedrive?.enabled}`;
-    return 'none';
-  }, [activeKind, settings.webdav, settings.googleDrive, settings.s3, settings.onedrive]);
+  const engineKey = activeKind ? fileSyncProviderConfigKey(activeKind, settings) : 'none';
 
   const [engine, setEngine] = useState<FileSyncEngine | null>(null);
   useEffect(() => {

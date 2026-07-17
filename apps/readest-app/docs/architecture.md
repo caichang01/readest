@@ -168,7 +168,7 @@ flowchart TB
     Reader["app/reader<br/>(views + tooling)"]
     Auth["app/auth<br/>(Supabase auth UI)"]
     Send["app/send<br/>(send-to-Readest inbox)"]
-    User["app/user<br/>(account, subscription, settings)"]
+    User["app/user<br/>(account, storage, sync settings)"]
     Updater["app/updater"]
     Offline["app/offline"]
     OPDS["app/opds<br/>(catalog browser)"]
@@ -336,13 +336,6 @@ metadata/search          -> metadata lookup (Google Books / Open Library)
 opds/proxy               -> CORS-friendly OPDS proxy
 tts/edge                 -> Edge TTS streaming
 hardcover/graphql        -> Hardcover GraphQL relay
-stripe/checkout          -> create checkout session
-stripe/portal            -> billing portal redirect
-stripe/plans             -> plan listing
-stripe/check             -> subscription state
-stripe/webhook           -> Stripe webhook handler
-google/iap-verify        -> Google Play IAP verification
-apple/iap-verify         -> App Store IAP verification
 share/*                  -> share-link landing + read-only render
 ```
 
@@ -358,11 +351,15 @@ the user's inbox so that the in-app `Send` page can pick them up via the
 
 `src/app/runtime-config.js/route.ts` is a server route that builds a small JSON
 object — `supabaseUrl`, `supabaseAnonKey`, `apiBaseUrl`, `objectStorageType`,
-`storageFixedQuota`, `translationFixedQuota` — from `process.env` at request
+`storageLimitBytes`, `translationDailyLimit` — from `process.env` at request
 time and serializes it as a JS payload. The client reads it through
 `getRuntimeConfig()` in `src/services/runtimeConfig.ts` (browser) or
 `getServerRuntimeConfig()` (server). This is the mechanism that makes the same
 prebuilt Docker image rebrandable per deployment.
+
+The storage and translation limits are optional deployment-wide operational
+safeguards. A missing or zero value means unlimited; limits are not derived
+from user plans or purchases.
 
 ## 6. Cross-cutting subsystems
 

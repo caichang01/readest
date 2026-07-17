@@ -241,8 +241,8 @@ export interface StorageStats {
   totalFiles: number;
   totalSize: number;
   usage: number;
-  quota: number;
-  usagePercentage: number;
+  limit: number | null;
+  usagePercentage: number | null;
   byBookHash: Array<{
     bookHash: string | null;
     fileCount: number;

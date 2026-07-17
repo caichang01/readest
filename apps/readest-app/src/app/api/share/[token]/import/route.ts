@@ -1,11 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseAdminClient } from '@/utils/supabase';
 import { copyObject, objectExists } from '@/utils/object';
-import {
-  STORAGE_QUOTA_GRACE_BYTES,
-  getStoragePlanData,
-  validateUserAndToken,
-} from '@/utils/access';
+import { getStoragePolicyData, isStorageLimitExceeded, validateUserAndToken } from '@/utils/access';
 import { rejectionToHttp, resolveActiveShare } from '@/libs/shareServer';
 
 interface RouteParams {
@@ -113,13 +109,13 @@ export async function POST(request: Request, { params }: RouteParams) {
     });
   }
 
-  // Quota check before doing any byte-copy work. JWT-based but consistent
-  // with how the existing upload endpoint enforces it.
-  const { usage, quota } = getStoragePlanData(jwt);
-  if (usage + share.bookSize > quota + STORAGE_QUOTA_GRACE_BYTES) {
+  // Optional deployment-level guard before doing any byte-copy work. This is
+  // disabled by default and is independent of user plans or purchases.
+  const { usage, limit } = getStoragePolicyData(jwt);
+  if (isStorageLimitExceeded(usage, share.bookSize, limit)) {
     return NextResponse.json(
-      { error: 'Insufficient storage quota', code: 'quota_exceeded', usage, quota },
-      { status: 402 },
+      { error: 'Storage limit exceeded', code: 'storage_limit_exceeded', usage, limit },
+      { status: 403 },
     );
   }
 

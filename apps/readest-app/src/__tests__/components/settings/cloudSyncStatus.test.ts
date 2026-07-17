@@ -8,27 +8,15 @@ const _ = (key: string) => key;
 
 describe('getReadestCloudRowStatus', () => {
   test('signed out wins over everything', () => {
-    expect(
-      getReadestCloudRowStatus(_, { signedIn: false, planLoading: true, selected: true }),
-    ).toBe('Not signed in');
-  });
-
-  test('loading while the plan resolves', () => {
-    expect(getReadestCloudRowStatus(_, { signedIn: true, planLoading: true, selected: true })).toBe(
-      '…',
-    );
+    expect(getReadestCloudRowStatus(_, { signedIn: false, selected: true })).toBe('Not signed in');
   });
 
   test('active when signed in and selected', () => {
-    expect(
-      getReadestCloudRowStatus(_, { signedIn: true, planLoading: false, selected: true }),
-    ).toBe('Active');
+    expect(getReadestCloudRowStatus(_, { signedIn: true, selected: true })).toBe('Active');
   });
 
   test('available when a third-party provider is selected instead', () => {
-    expect(
-      getReadestCloudRowStatus(_, { signedIn: true, planLoading: false, selected: false }),
-    ).toBe('Available');
+    expect(getReadestCloudRowStatus(_, { signedIn: true, selected: false })).toBe('Available');
   });
 });
 
@@ -37,7 +25,6 @@ describe('getThirdPartyRowStatus', () => {
     enabled: true,
     configured: true,
     syncing: false,
-    paused: false,
     lastError: null,
     syncBooks: true,
   };
@@ -47,12 +34,6 @@ describe('getThirdPartyRowStatus', () => {
       'Not connected',
     );
     expect(getThirdPartyRowStatus(_, { ...base, enabled: false })).toBe('Configured');
-  });
-
-  test('paused outranks syncing, errors, and warnings', () => {
-    expect(
-      getThirdPartyRowStatus(_, { ...base, paused: true, syncing: true, lastError: 'x' }),
-    ).toBe('Paused — plan required');
   });
 
   test('syncing while a run is in flight', () => {

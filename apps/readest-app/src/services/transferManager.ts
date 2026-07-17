@@ -18,7 +18,7 @@ const RETRY_DELAY_BASE_MS = 2000;
 const PROGRESS_THROTTLE_MS = 100;
 // Quota failures in a batch import arrive one per book as transfers drain;
 // collapse them into one summary toast per burst instead of N identical toasts.
-const QUOTA_TOAST_FLUSH_MS = 1500;
+const STORAGE_LIMIT_TOAST_FLUSH_MS = 1500;
 
 interface PersistedQueueData {
   schemaVersion?: number;
@@ -38,8 +38,8 @@ class TransferManager {
   private updateBook: ((book: Book) => Promise<void>) | null = null;
   private _: TranslationFunc | null = null;
   private settingsUnsub: (() => void) | null = null;
-  private quotaFailureCount = 0;
-  private quotaToastTimer: ReturnType<typeof setTimeout> | null = null;
+  private storageLimitFailureCount = 0;
+  private storageLimitToastTimer: ReturnType<typeof setTimeout> | null = null;
   private readyResolve: () => void = () => {};
   private readyPromise: Promise<void> = new Promise<void>((resolve) => {
     this.readyResolve = resolve;
@@ -461,12 +461,12 @@ class TransferManager {
       const currentStore = useTransferStore.getState();
       const currentTransfer = currentStore.transfers[transfer.id];
 
-      // Quota exhaustion is permanent for this account state; retrying
-      // burns three backoff rounds per book for the same 403.
-      const isQuotaError = errorMessage.includes('Insufficient storage quota');
+      // A deployment storage limit is not transient; retrying burns three
+      // backoff rounds per book for the same 403.
+      const isStorageLimitError = errorMessage.includes('Storage limit exceeded');
 
       if (
-        !isQuotaError &&
+        !isStorageLimitError &&
         currentTransfer &&
         currentTransfer.retryCount < currentTransfer.maxRetries
       ) {
@@ -488,8 +488,8 @@ class TransferManager {
             type: 'error',
             message: _('Please log in to continue'),
           });
-        } else if (isQuotaError) {
-          this.recordQuotaFailure();
+        } else if (isStorageLimitError) {
+          this.recordStorageLimitFailure();
         } else {
           const errorMessages = getTransferMessages(transfer, _).failure;
 
@@ -516,25 +516,28 @@ class TransferManager {
     }
   }
 
-  private recordQuotaFailure(): void {
-    this.quotaFailureCount += 1;
-    if (this.quotaToastTimer) clearTimeout(this.quotaToastTimer);
-    this.quotaToastTimer = setTimeout(() => this.flushQuotaToast(), QUOTA_TOAST_FLUSH_MS);
+  private recordStorageLimitFailure(): void {
+    this.storageLimitFailureCount += 1;
+    if (this.storageLimitToastTimer) clearTimeout(this.storageLimitToastTimer);
+    this.storageLimitToastTimer = setTimeout(
+      () => this.flushStorageLimitToast(),
+      STORAGE_LIMIT_TOAST_FLUSH_MS,
+    );
   }
 
-  private flushQuotaToast(): void {
+  private flushStorageLimitToast(): void {
     const _ = this._;
-    const count = this.quotaFailureCount;
-    this.quotaFailureCount = 0;
-    this.quotaToastTimer = null;
+    const count = this.storageLimitFailureCount;
+    this.storageLimitFailureCount = 0;
+    this.storageLimitToastTimer = null;
     if (!count || !_) return;
 
     eventDispatcher.dispatch('toast', {
       type: 'error',
       message:
         count === 1
-          ? _('Insufficient storage quota')
-          : _('{{count}} uploads failed: insufficient storage quota', { count }),
+          ? _('Storage limit exceeded')
+          : _('{{count}} uploads failed: storage limit exceeded', { count }),
     });
   }
 

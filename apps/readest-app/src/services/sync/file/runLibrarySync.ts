@@ -5,7 +5,7 @@ import type { TranslationFunc } from '@/hooks/useTranslation';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useFileSyncStore } from '@/store/fileSyncStore';
-import { resolveCloudSyncGate, settingsKeyForBackend } from '@/services/sync/cloudSyncProvider';
+import { getCloudSyncProvider, settingsKeyForBackend } from '@/services/sync/cloudSyncProvider';
 import { createFileSyncProvider } from '@/services/sync/file/providerRegistry';
 import { createAppLocalStore } from '@/services/sync/file/appLocalStore';
 import { FileSyncEngine, type SyncLibraryResult } from '@/services/sync/file/engine';
@@ -28,11 +28,9 @@ export const runActiveFileLibrarySync = async (
   envConfig: EnvConfigType,
   _: TranslationFunc,
 ): Promise<SyncLibraryResult | null> => {
-  const gate = resolveCloudSyncGate(useSettingsStore.getState().settings);
-  // Paused means paused (#4959): a downgraded account's still-selected
-  // provider must not sync, and must not fall back to Readest Cloud either.
-  if (gate.provider === 'readest' || gate.paused) return null;
-  const kind = gate.provider;
+  const provider = getCloudSyncProvider(useSettingsStore.getState().settings);
+  if (provider === 'readest') return null;
+  const kind = provider;
 
   if (!useLibraryStore.getState().libraryLoaded) return null;
 
@@ -99,9 +97,9 @@ export const runActiveFileLibrarySync = async (
  */
 const buildActiveEngine = async (envConfig: EnvConfigType): Promise<FileSyncEngine | null> => {
   const settings = useSettingsStore.getState().settings;
-  const gate = resolveCloudSyncGate(settings);
-  if (gate.provider === 'readest' || gate.paused) return null;
-  const kind = gate.provider;
+  const provider = getCloudSyncProvider(settings);
+  if (provider === 'readest') return null;
+  const kind = provider;
   const appService = await envConfig.getAppService();
   const fileProvider = await createFileSyncProvider(kind, settings);
   if (!fileProvider) return null;

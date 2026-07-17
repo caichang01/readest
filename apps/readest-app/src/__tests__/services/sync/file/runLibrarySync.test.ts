@@ -1,6 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { useSettingsStore } from '@/store/settingsStore';
-import { setCachedUserPlan } from '@/services/sync/cloudSyncProvider';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useFileSyncStore } from '@/store/fileSyncStore';
 import type { SystemSettings } from '@/types/settings';
@@ -74,8 +73,6 @@ const setProvider = (patch: Partial<SystemSettings>): void => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Third-party cloud sync is premium; run the suite as a paid plan.
-  setCachedUserPlan('pro');
   syncLibrary.mockClear().mockResolvedValue({ booksSynced: 0 });
   useFileSyncStore.setState({ byKind: {}, activeKind: null, lastErrorByKind: {} });
   useLibraryStore.setState({ library: [], libraryLoaded: true } as never);
@@ -200,23 +197,18 @@ describe('runActiveFileBookDownload', () => {
   });
 });
 
-// Paused means paused (#4959 contract): a free plan with a still-enabled
-// third-party provider (downgrade) must not sync — neither the library run
-// nor the per-book actions.
-describe('premium gating of the active provider', () => {
-  test('library sync is skipped for a free plan', async () => {
-    setCachedUserPlan('free');
+describe('subscription-free active providers', () => {
+  test('library sync runs without a cached paid entitlement', async () => {
     setProvider({ webdav: { enabled: true, deviceId: 'd1' } } as Partial<SystemSettings>);
-    expect(await runActiveFileLibrarySync(envConfig, translationFn)).toBeNull();
-    expect(syncLibrary).not.toHaveBeenCalled();
+    expect(await runActiveFileLibrarySync(envConfig, translationFn)).not.toBeNull();
+    expect(syncLibrary).toHaveBeenCalledTimes(1);
   });
 
-  test('per-book upload and download are skipped for a free plan', async () => {
-    setCachedUserPlan('free');
+  test('per-book upload and download run without a cached paid entitlement', async () => {
     setProvider({ webdav: { enabled: true } } as Partial<SystemSettings>);
-    expect(await runActiveFileBookUpload(envConfig, makeBook('h1'))).toBe(false);
-    expect(await runActiveFileBookDownload(envConfig, makeBook('h1'))).toBe(false);
-    expect(pushBookFile).not.toHaveBeenCalled();
-    expect(downloadBookFile).not.toHaveBeenCalled();
+    expect(await runActiveFileBookUpload(envConfig, makeBook('h1'))).toBe(true);
+    expect(await runActiveFileBookDownload(envConfig, makeBook('h1'))).toBe(true);
+    expect(pushBookFile).toHaveBeenCalledTimes(1);
+    expect(downloadBookFile).toHaveBeenCalledTimes(1);
   });
 });
