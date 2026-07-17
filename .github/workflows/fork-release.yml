@@ -1,0 +1,303 @@
+name: Fork Release Installers
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_DIR: apps/readest-app
+  NDK_VERSION: 28.2.13676358
+
+jobs:
+  android:
+    name: Android release APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Initialize git submodules
+        run: git submodule update --init --recursive
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up Java
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
+        with:
+          distribution: zulu
+          java-version: 17
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+
+      - name: Install Android SDK packages
+        run: >-
+          sdkmanager
+          "platforms;android-36"
+          "build-tools;35.0.0"
+          "ndk;${NDK_VERSION}"
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Prepare vendor assets
+        run: pnpm --filter @readest/readest-app setup-vendors
+
+      - name: Install Rust targets
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: fork-release-android
+          cache-all-crates: "true"
+          cache-workspace-crates: "true"
+
+      - name: Prepare Tauri environment
+        run: cp "$APP_DIR/.env.tauri" "$APP_DIR/.env.local"
+
+      - name: Generate Android project
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          rm -rf src-tauri/gen/android
+          pnpm tauri android init
+          pnpm tauri icon ../../data/icons/readest-book.png
+          git restore src-tauri/gen/android src-tauri/icons
+
+      - name: Configure Android signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keystore="$RUNNER_TEMP/readest-fork.jks"
+
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+            alias="$KEY_ALIAS"
+            password="$KEY_PASSWORD"
+            echo "Using the stable Android signing key configured in repository secrets."
+          else
+            alias="readest-fork-ci"
+            password="android"
+            echo "::warning::ANDROID_KEY_* secrets are not configured. This run uses a temporary signing key; its APKs cannot update APKs from another run."
+            keytool -genkeypair -noprompt \
+              -keystore "$keystore" \
+              -storepass "$password" \
+              -keypass "$password" \
+              -alias "$alias" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Readest Fork CI,OU=CI,O=Readest Fork,L=Unknown,ST=Unknown,C=US"
+          fi
+
+          cat > "$APP_DIR/src-tauri/gen/android/keystore.properties" <<EOF
+          keyAlias=$alias
+          password=$password
+          storeFile=$keystore
+          EOF
+
+      - name: Build universal and ARM64 APKs
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          short_sha="${GITHUB_SHA::8}"
+          out="$GITHUB_WORKSPACE/dist/android"
+          mkdir -p "$out"
+
+          pnpm tauri android build
+          cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
+            "$out/Readest_${version}_${short_sha}_universal.apk"
+
+          pnpm tauri android build --target aarch64
+          cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
+            "$out/Readest_${version}_${short_sha}_arm64.apk"
+
+      - name: Verify Android APKs
+        run: |
+          set -euo pipefail
+          for apk in dist/android/*.apk; do
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+            "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -v 4 "$apk" >/dev/null
+          done
+          sha256sum dist/android/*.apk > dist/android/SHA256SUMS
+
+      - name: Upload Android installers
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: readest-android-${{ github.sha }}
+          path: dist/android
+          if-no-files-found: error
+          retention-days: 30
+
+  desktop:
+    name: ${{ matrix.name }} release installer
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            platform: windows
+            runs_on: windows-latest
+            rust_targets: x86_64-pc-windows-msvc
+            tauri_args: --target x86_64-pc-windows-msvc --bundles nsis
+            artifact_name: readest-windows-x64
+          - name: Windows ARM64
+            platform: windows
+            runs_on: windows-latest
+            rust_targets: aarch64-pc-windows-msvc
+            tauri_args: --target aarch64-pc-windows-msvc --bundles nsis
+            artifact_name: readest-windows-arm64
+          - name: Linux x64
+            platform: linux
+            runs_on: ubuntu-22.04
+            rust_targets: x86_64-unknown-linux-gnu
+            tauri_args: ""
+            artifact_name: readest-linux-x64
+          - name: Linux ARM64
+            platform: linux
+            runs_on: ubuntu-22.04-arm
+            rust_targets: aarch64-unknown-linux-gnu
+            tauri_args: ""
+            artifact_name: readest-linux-arm64
+          - name: macOS Universal
+            platform: macos
+            runs_on: macos-latest
+            rust_targets: x86_64-apple-darwin,aarch64-apple-darwin
+            tauri_args: --target universal-apple-darwin --bundles dmg
+            artifact_name: readest-macos-universal
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Initialize git submodules
+        run: git submodule update --init --recursive
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Prepare vendor assets
+        run: pnpm --filter @readest/readest-app setup-vendors
+
+      - name: Install Rust targets
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: fork-release-${{ matrix.artifact_name }}
+          cache-all-crates: "true"
+          cache-workspace-crates: "true"
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libfontconfig-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1 \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1 \
+            libjavascriptcoregtk-4.1-dev \
+            gir1.2-javascriptcoregtk-4.1 \
+            gir1.2-webkit2-4.1 \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Install portable AppImage bundler
+        if: matrix.platform == 'linux'
+        run: cargo install tauri-cli --git https://github.com/tauri-apps/tauri --branch feat/truly-portable-appimage --force
+
+      - name: Pin AppImage helper
+        if: matrix.platform == 'linux'
+        run: |
+          cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+          mkdir -p "$cache_dir"
+          curl -fsSL --retry 3 -o "$cache_dir/quick-sharun.sh" \
+            "https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/b3a9e985cdedf7efa81d172f182cd13983743147/useful-tools/quick-sharun.sh"
+          chmod +x "$cache_dir/quick-sharun.sh"
+
+      - name: Prepare Tauri environment
+        run: cp "$APP_DIR/.env.tauri" "$APP_DIR/.env.local"
+
+      - name: Build release installer
+        env:
+          TAURI_BUNDLER_NEW_APPIMAGE_FORMAT: "true"
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          if [ "${{ matrix.platform }}" = "linux" ]; then
+            cargo tauri build
+          else
+            pnpm tauri build ${{ matrix.tauri_args }}
+          fi
+
+      - name: Collect release installer
+        run: |
+          set -euo pipefail
+          out="dist/${{ matrix.artifact_name }}"
+          mkdir -p "$out"
+
+          case "${{ matrix.platform }}" in
+            windows)
+              find target -type f -path '*/bundle/nsis/*-setup.exe' -exec cp {} "$out/" \;
+              ;;
+            macos)
+              find target -type f -path '*/bundle/dmg/*.dmg' -exec cp {} "$out/" \;
+              ;;
+            linux)
+              find target -type f \( -path '*/bundle/appimage/*.AppImage' -o -path '*/bundle/deb/*.deb' \) -exec cp {} "$out/" \;
+              ;;
+          esac
+
+          test -n "$(find "$out" -type f -print -quit)"
+
+      - name: Upload release installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-${{ github.sha }}
+          path: dist/${{ matrix.artifact_name }}
+          if-no-files-found: error
+          retention-days: 30
