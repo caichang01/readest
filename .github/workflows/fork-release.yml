@@ -269,9 +269,9 @@ jobs:
           set -euo pipefail
           cd "$APP_DIR"
           if [ "${{ matrix.platform }}" = "linux" ]; then
-            cargo tauri build
+            cargo tauri build --config src-tauri/fork-ci-tauri-config.json
           else
-            pnpm tauri build ${{ matrix.tauri_args }}
+            pnpm tauri build --config src-tauri/fork-ci-tauri-config.json ${{ matrix.tauri_args }}
           fi
 
       - name: Collect release installer
