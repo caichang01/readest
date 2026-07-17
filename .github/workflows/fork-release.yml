@@ -4,21 +4,51 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the current app version even if it did not change
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
   group: fork-release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   APP_DIR: apps/readest-app
   NDK_VERSION: 28.2.13676358
 
 jobs:
+  metadata:
+    name: Resolve release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      is_prerelease: ${{ steps.release.outputs.is_prerelease }}
+      should_release: ${{ steps.release.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Test release metadata logic
+        run: node --test .github/scripts/release-metadata.test.mjs
+
+      - name: Detect version change
+        id: release
+        env:
+          PREVIOUS_SHA: ${{ github.event.before }}
+          FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || false }}
+        run: node .github/scripts/release-metadata.mjs
+
   android:
     name: Android release APKs
+    needs: metadata
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -155,6 +185,7 @@ jobs:
 
   desktop:
     name: ${{ matrix.name }} release installer
+    needs: metadata
     strategy:
       fail-fast: false
       matrix:
@@ -301,3 +332,107 @@ jobs:
           path: dist/${{ matrix.artifact_name }}
           if-no-files-found: error
           retention-days: 30
+
+  publish-release:
+    name: Publish GitHub Release
+    if: needs.metadata.outputs.should_release == 'true'
+    needs: [metadata, android, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download installers
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: readest-*-${{ github.sha }}
+          path: release-artifacts
+
+      - name: Stage and verify release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-files
+
+          while IFS= read -r -d '' file; do
+            name=$(basename "$file")
+            if [ "$name" = "SHA256SUMS" ]; then
+              continue
+            fi
+            if [ -e "release-files/$name" ]; then
+              echo "::error::Duplicate release asset name: $name"
+              exit 1
+            fi
+            cp "$file" "release-files/$name"
+          done < <(find release-artifacts -type f -print0)
+
+          test "$(find release-files -maxdepth 1 -type f -name '*.apk' | wc -l | tr -d ' ')" -eq 2
+          test "$(find release-files -maxdepth 1 -type f -name '*.exe' | wc -l | tr -d ' ')" -eq 2
+          test "$(find release-files -maxdepth 1 -type f -name '*.AppImage' | wc -l | tr -d ' ')" -eq 2
+          test "$(find release-files -maxdepth 1 -type f -name '*.deb' | wc -l | tr -d ' ')" -eq 2
+          test "$(find release-files -maxdepth 1 -type f -name '*.dmg' | wc -l | tr -d ' ')" -eq 1
+
+          cd release-files
+          sha256sum * > SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Inspect existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if is_draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "is_draft=$is_draft" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "is_draft=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reject an unrelated existing tag
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $RELEASE_TAG already exists without a GitHub Release. Refusing to overwrite it."
+            exit 1
+          fi
+
+      - name: Create release
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          IS_PRERELEASE: ${{ needs.metadata.outputs.is_prerelease }}
+        run: |
+          set -euo pipefail
+          release_flags=()
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" release-files/* \
+            --target "$GITHUB_SHA" \
+            --title "Readest v$RELEASE_VERSION" \
+            --generate-notes \
+            "${release_flags[@]}"
+
+      - name: Repair and publish an interrupted draft release
+        if: steps.existing.outputs.is_draft == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          gh release upload "$RELEASE_TAG" release-files/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false
+
+      - name: Report an already published release
+        if: steps.existing.outputs.exists == 'true' && steps.existing.outputs.is_draft == 'false'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: echo "Release $RELEASE_TAG already exists; no duplicate was created."
