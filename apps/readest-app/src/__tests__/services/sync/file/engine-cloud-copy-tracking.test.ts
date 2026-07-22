@@ -126,7 +126,10 @@ describe('FileSyncEngine — device-local fields must not cross devices (#5084)'
       captured,
     });
     const addBookToLibrary = vi.fn<(b: Book) => Promise<void>>(async () => {});
-    const store = fakeStore({ addBookToLibrary });
+    const store = fakeStore({
+      addBookToLibrary,
+      resolveLocalBookPath: async () => ({ path: '/local/h1/Book h1.epub', size: 8 }),
+    });
 
     await new FileSyncEngine(provider, store).syncLibrary([], {
       strategy: 'silent',

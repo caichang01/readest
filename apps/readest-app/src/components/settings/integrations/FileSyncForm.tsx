@@ -101,7 +101,8 @@ const FileSyncForm: React.FC<FileSyncFormProps> = ({
   /**
    * Manual "Sync now" — reconcile the local library with the remote over a
    * bounded-concurrency pool. Incremental by default (only books whose local
-   * copy differs from the shared index); "Full Sync" re-checks every book. The
+   * copy differs from the shared index); "Repair on Next Sync" performs one
+   * full local/remote integrity check and then resets itself. The
    * provider is built by kind through the registry so this stays backend-neutral.
    */
   const handleSyncNow = async () => {
@@ -147,10 +148,11 @@ const FileSyncForm: React.FC<FileSyncFormProps> = ({
       }
       const store = createAppLocalStore({ appService, settings, envConfig });
       const engine = new FileSyncEngine(provider, store);
+      const fullSyncRequested = stored.fullSync ?? false;
       const result = await engine.syncLibrary(currentLibrary, {
         strategy: stored.strategy === 'prompt' ? 'silent' : stored.strategy,
         syncBooks: stored.syncBooks ?? false,
-        fullSync: stored.fullSync ?? false,
+        fullSync: fullSyncRequested,
         deviceId: deviceId as string,
         onProgress: ({ book, index, total, action }) => {
           const actionStr = action === 'downloading' ? _('Downloading') : _('Uploading');
@@ -162,7 +164,10 @@ const FileSyncForm: React.FC<FileSyncFormProps> = ({
         },
       });
 
-      await persist({ lastSyncedAt: Date.now() });
+      await persist({
+        lastSyncedAt: Date.now(),
+        ...(fullSyncRequested ? { fullSync: false } : {}),
+      });
       // A completed run heals the provider's health surfaces (the Cloud Sync
       // chooser row, the SettingsMenu sync row) — otherwise a pre-restart
       // failure keeps reading "Sync failed" after a successful manual sync.

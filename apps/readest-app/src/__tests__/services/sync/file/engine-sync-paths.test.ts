@@ -129,7 +129,11 @@ describe('FileSyncEngine.syncLibrary — remote discovery + streaming download',
     });
     const addBookToLibrary = vi.fn<(book: Book) => Promise<void>>(async () => {});
     const prepareLocalBookPath = vi.fn(async () => '/local/h2/Remote.epub');
-    const store = fakeStore({ addBookToLibrary, prepareLocalBookPath });
+    const store = fakeStore({
+      addBookToLibrary,
+      prepareLocalBookPath,
+      resolveLocalBookPath: async () => ({ path: '/local/h2/Remote.epub', size: 50 }),
+    });
 
     const res = await new FileSyncEngine(provider, store).syncLibrary([], {
       strategy: 'silent',
@@ -144,6 +148,40 @@ describe('FileSyncEngine.syncLibrary — remote discovery + streaming download',
     expect(addBookToLibrary).toHaveBeenCalledTimes(1);
     expect(addBookToLibrary.mock.calls[0]![0].hash).toBe('h2');
     expect(res.booksDownloaded).toBe(1);
+  });
+
+  test('rejects a remote-only streaming download whose local size is incomplete', async () => {
+    const downloadStream = vi.fn(async () => true);
+    const addBookToLibrary = vi.fn<(book: Book) => Promise<void>>(async () => {});
+    const provider = fakeProvider({
+      list: async (path: string) =>
+        path.endsWith('/books')
+          ? [{ name: 'h2', path: '/Readest/books/h2', isDirectory: true }]
+          : [
+              {
+                name: 'Remote.epub',
+                path: '/Readest/books/h2/Remote.epub',
+                isDirectory: false,
+                size: 50,
+              },
+            ],
+      downloadStream,
+    });
+    const store = fakeStore({
+      addBookToLibrary,
+      resolveLocalBookPath: async () => ({ path: '/local/h2/Remote.epub', size: 12 }),
+    });
+
+    const res = await new FileSyncEngine(provider, store).syncLibrary([], {
+      strategy: 'silent',
+      syncBooks: false,
+      deviceId: 'd',
+    });
+
+    expect(addBookToLibrary).not.toHaveBeenCalled();
+    expect(res.booksDownloaded).toBe(0);
+    expect(res.failures).toBe(1);
+    expect(res.failedBooks[0]?.reason).toContain('size');
   });
 });
 
@@ -174,7 +212,10 @@ describe('FileSyncEngine.downloadBookFile', () => {
       list: hashDirListing(true),
       readBinary: async () => new ArrayBuffer(9),
     });
-    const store = fakeStore({ saveBookFile });
+    const store = fakeStore({
+      saveBookFile,
+      resolveLocalBookPath: async () => ({ path: '/local/h1/B.epub', size: 9 }),
+    });
 
     const ok = await new FileSyncEngine(provider, store).downloadBookFile(makeBook('h1'));
 
@@ -197,12 +238,27 @@ describe('FileSyncEngine.downloadBookFile', () => {
     const downloadStream = vi.fn(async () => true);
     const prepareLocalBookPath = vi.fn(async () => '/local/h1/B.epub');
     const provider = fakeProvider({ list: hashDirListing(true), downloadStream });
-    const store = fakeStore({ prepareLocalBookPath });
+    const store = fakeStore({
+      prepareLocalBookPath,
+      resolveLocalBookPath: async () => ({ path: '/local/h1/B.epub', size: 9 }),
+    });
 
     const ok = await new FileSyncEngine(provider, store).downloadBookFile(makeBook('h1'));
 
     expect(ok).toBe(true);
     expect(downloadStream).toHaveBeenCalledWith('/Readest/books/h1/B.epub', '/local/h1/B.epub');
+  });
+
+  test('returns false when a streaming download is shorter than the remote object', async () => {
+    const downloadStream = vi.fn(async () => true);
+    const provider = fakeProvider({ list: hashDirListing(true), downloadStream });
+    const store = fakeStore({
+      resolveLocalBookPath: async () => ({ path: '/local/h1/B.epub', size: 8 }),
+    });
+
+    const ok = await new FileSyncEngine(provider, store).downloadBookFile(makeBook('h1'));
+
+    expect(ok).toBe(false);
   });
 });
 
@@ -780,10 +836,13 @@ describe('FileSyncEngine.syncLibrary — empty-dir record', () => {
       captured,
     });
     const addBookToLibrary = vi.fn(async () => {});
-    const res = await new FileSyncEngine(provider, fakeStore({ addBookToLibrary })).syncLibrary(
-      [],
-      opts,
-    );
+    const res = await new FileSyncEngine(
+      provider,
+      fakeStore({
+        addBookToLibrary,
+        resolveLocalBookPath: async () => ({ path: '/local/h9/B.epub', size: 9 }),
+      }),
+    ).syncLibrary([], opts);
 
     expect(res.booksDownloaded).toBe(1);
     const idx = JSON.parse(
@@ -828,6 +887,61 @@ describe('FileSyncEngine.syncLibrary — row-as-truth local file gate', () => {
     expect(loadBookFile).not.toHaveBeenCalled();
     expect(resolveLocalBookPath).not.toHaveBeenCalled();
     expect(head).not.toHaveBeenCalledWith(expect.stringContaining('/books/'));
+  });
+
+  test('repairs an uploaded book whose local file vanished even when the index ETag is unchanged', async () => {
+    const remoteBook = makeBook('h1', { updatedAt: 100, uploadedAt: 10, downloadedAt: 10 });
+    const head = vi.fn(async (p: string) =>
+      p.endsWith('library.json') ? { etag: 'unchanged-index' } : null,
+    );
+    const list = vi.fn(async (path: string) => {
+      if (path.endsWith('/books')) {
+        return [{ name: 'h1', path: '/Readest/books/h1', isDirectory: true }];
+      }
+      if (path.endsWith('/books/h1')) {
+        return [
+          {
+            name: 'Book h1.epub',
+            path: '/Readest/books/h1/Book h1.epub',
+            isDirectory: false,
+            size: 50,
+          },
+        ];
+      }
+      return [];
+    });
+    const downloadStream = vi.fn(async () => true);
+    const provider = fakeProvider({
+      head,
+      readText: async (p) =>
+        p.endsWith('library.json') ? JSON.stringify(makeIndex([remoteBook], ['h1'])) : null,
+      list,
+      downloadStream,
+    });
+    const resolveLocalBookPath = vi
+      .fn<LocalStore['resolveLocalBookPath']>()
+      .mockResolvedValueOnce({ path: '/local/h1/Book h1.epub', size: 50 })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ path: '/local/h1/Book h1.epub', size: 50 });
+    const updateBookMetadata = vi.fn(async () => {});
+    const store = fakeStore({ resolveLocalBookPath, updateBookMetadata });
+    const options = {
+      strategy: 'receive',
+      syncBooks: false,
+      deviceId: 'd',
+    } as const;
+
+    await new FileSyncEngine(provider, store).syncLibrary([remoteBook], options);
+    const result = await new FileSyncEngine(provider, store).syncLibrary([remoteBook], options);
+
+    expect(downloadStream).toHaveBeenCalledWith(
+      '/Readest/books/h1/Book h1.epub',
+      expect.any(String),
+    );
+    expect(updateBookMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ hash: 'h1', downloadedAt: expect.any(Number) }),
+    );
+    expect(result.booksDownloaded).toBe(1);
   });
 });
 
