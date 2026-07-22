@@ -2,6 +2,7 @@
 
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import {
+  DIAGNOSTIC_LOG_BYTE_LIMIT,
   DIAGNOSTIC_LOG_LIMIT,
   appendDiagnosticLog,
   clearDiagnosticLog,
@@ -89,6 +90,20 @@ describe('diagnosticLog', () => {
     expect(JSON.stringify(entry)).not.toContain('X-Amz-Signature=secret');
   });
 
+  test('keeps file signature bytes while redacting authentication signatures', () => {
+    appendDiagnosticLog('reader', 'file-inspected', {
+      signatureHex: '504b0304',
+      signature: 'request-signature',
+      xAmzSignature: 'aws-signature',
+    });
+
+    expect(readDiagnosticLog()[0]?.data).toEqual({
+      signatureHex: '504b0304',
+      signature: '[REDACTED]',
+      xAmzSignature: '[REDACTED]',
+    });
+  });
+
   test('keeps only the newest bounded number of entries', () => {
     for (let i = 0; i < DIAGNOSTIC_LOG_LIMIT + 5; i += 1) {
       appendDiagnosticLog('test', `event-${i}`);
@@ -98,6 +113,18 @@ describe('diagnosticLog', () => {
     expect(entries).toHaveLength(DIAGNOSTIC_LOG_LIMIT);
     expect(entries[0]?.event).toBe('event-5');
     expect(entries.at(-1)?.event).toBe(`event-${DIAGNOSTIC_LOG_LIMIT + 4}`);
+  });
+
+  test('evicts old entries before the persisted log exceeds its byte budget', () => {
+    for (let i = 0; i < 100; i += 1) {
+      appendDiagnosticLog('test', `large-event-${i}`, { payload: '界'.repeat(4_000) });
+    }
+
+    const entries = readDiagnosticLog();
+    const persistedBytes = new TextEncoder().encode(JSON.stringify(entries)).byteLength;
+    expect(persistedBytes).toBeLessThanOrEqual(DIAGNOSTIC_LOG_BYTE_LIMIT);
+    expect(entries.length).toBeLessThan(100);
+    expect(entries.at(-1)?.event).toBe('large-event-99');
   });
 
   test('exports a JSONL document with a format header and every saved entry', () => {

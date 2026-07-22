@@ -9,13 +9,15 @@ export interface DiagnosticLogEntry {
 }
 
 export const DIAGNOSTIC_LOG_LIMIT = 500;
+export const DIAGNOSTIC_LOG_BYTE_LIMIT = 256_000;
 
 const STORAGE_KEY = 'readest_diagnostic_log_v1';
 const REDACTED = '[REDACTED]';
 const MAX_DEPTH = 6;
 const MAX_STRING_LENGTH = 8_000;
-const SENSITIVE_KEY =
-  /access.?key|secret|authorization|password|token|credential|signature|cookie/i;
+const SENSITIVE_KEY = /access.?key|secret|authorization|password|token|credential|cookie/i;
+const SENSITIVE_SIGNATURE_KEY =
+  /^(?:signature|x.?amz.?signature|aws.?signature|request.?signature)$/i;
 const URL_PATTERN = /https?:\/\/[^\s"'<>]+/gi;
 
 const storage = (): Storage | null => {
@@ -70,12 +72,29 @@ const sanitizeValue = (value: unknown, seen: WeakSet<object>, depth: number): un
 
   const out: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value)) {
-    out[key] = SENSITIVE_KEY.test(key) ? REDACTED : sanitizeValue(nested, seen, depth + 1);
+    out[key] =
+      SENSITIVE_KEY.test(key) || SENSITIVE_SIGNATURE_KEY.test(key)
+        ? REDACTED
+        : sanitizeValue(nested, seen, depth + 1);
   }
   return out;
 };
 
 const sanitize = (value: unknown): unknown => sanitizeValue(value, new WeakSet(), 0);
+
+const byteLength = (value: unknown): number =>
+  new TextEncoder().encode(JSON.stringify(value)).byteLength;
+
+const boundEntries = (entries: DiagnosticLogEntry[]): DiagnosticLogEntry[] => {
+  const bounded = entries.slice(-DIAGNOSTIC_LOG_LIMIT);
+  while (bounded.length > 1 && byteLength(bounded) > DIAGNOSTIC_LOG_BYTE_LIMIT) {
+    bounded.shift();
+  }
+  if (bounded.length === 1 && byteLength(bounded) > DIAGNOSTIC_LOG_BYTE_LIMIT) {
+    return [{ ...bounded[0]!, data: '[ENTRY_EXCEEDED_BYTE_LIMIT]' }];
+  }
+  return bounded;
+};
 
 export const readDiagnosticLog = (): DiagnosticLogEntry[] => {
   const target = storage();
@@ -103,7 +122,7 @@ export const appendDiagnosticLog = (
     event: sanitizeString(event),
     ...(data === undefined ? {} : { data: sanitize(data) }),
   };
-  const entries = [...readDiagnosticLog(), entry].slice(-DIAGNOSTIC_LOG_LIMIT);
+  const entries = boundEntries([...readDiagnosticLog(), entry]);
   try {
     target.setItem(STORAGE_KEY, JSON.stringify(entries));
   } catch {

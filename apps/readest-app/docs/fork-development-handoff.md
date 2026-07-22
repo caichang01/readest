@@ -196,7 +196,7 @@ pnpm tauri android build -t aarch64 -- --features devtools
 
 实现内容：
 
-- 新增有界本地日志，最多保留最近 500 条。
+- 新增有界本地日志，最多保留最近 500 条且总 UTF-8 容量不超过约 256 KB；超限时优先淘汰最旧记录。
 - 支持导出 JSONL、清除日志。
 - 设置 → 集成 → S3 中提供 Diagnostic Logs 面板。
 - 递归脱敏 Access Key、Secret Key、token、授权信息和 URL 查询参数。
@@ -215,7 +215,7 @@ pnpm tauri android build -t aarch64 -- --features devtools
 - `src-tauri/src/transfer_file.rs`
 - `src/components/settings/integrations/S3Form.tsx`
 
-已知诊断缺陷：脱敏键名规则将 `signatureHex` 中的 `signature` 误认为认证签名，因此文件头目前显示为 `[REDACTED]`。后续可把字段改名为 `headerHex`，或缩小敏感键匹配范围。
+2026-07-22 的生产化收敛进一步区分了认证请求签名和书籍文件头签名字节：`signature`、`xAmzSignature` 等认证字段仍会脱敏，`signatureHex` 可以正常导出。正式构建不启用 Tauri `devtools` feature；诊断能力本身不引入大型依赖或资源。
 
 ## 4. S3 跨设备“无法打开书籍”调查
 
@@ -264,7 +264,6 @@ pnpm tauri android build -t aarch64 -- --features devtools
 5. 书籍条目在文件未准备好时显示下载状态，禁止直接交给阅读器解析。
 6. 打开书籍遇到文件缺失或明显不完整时，允许从当前第三方 provider 自动重新下载一次，然后再打开；必须防止无限重试。
 7. 将“完全同步”改成语义明确的一次性“重新检查并修复”操作，或确保开关与自动同步行为一致。当前自动同步在 `useLibraryFileSync.ts` 中固定传入 `fullSync:false`，只有设置页的手动 Sync now 才读取该开关。
-8. 修正诊断日志对 `signatureHex` 的过度脱敏。
 
 验收场景至少包括：
 
@@ -291,7 +290,7 @@ pnpm tauri android build -t aarch64 -- --features devtools
 全量 `pnpm test` 的结果：
 
 - 539 个测试文件中 538 个通过。
-- 7250 条测试中 7244 条通过、3 条跳过、3 条失败。
+- 7252 条测试中 7246 条通过、3 条跳过、3 条失败。
 - 失败全部位于 `src/__tests__/database/turso-node.test.ts` 的向量 L2 距离精度断言。
 - 示例：期望 `5.0`，实际约 `4.99704122543335`；期望 `sqrt(2)`，实际约 `1.414939284324646`。
 - 这是诊断改动之前已存在的 Turso/SQLite 向量实现或精度基线问题，与 S3 日志功能无关。
