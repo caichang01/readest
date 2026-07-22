@@ -37,6 +37,7 @@ import { AwsClient } from 'aws4fetch';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isTauriAppPlatform } from '@/services/environment';
 import { tauriDownload, tauriUpload } from '@/utils/transfer';
+import { appendDiagnosticLog } from '@/utils/diagnosticLog';
 import {
   FileEntry,
   FileHead,
@@ -327,11 +328,19 @@ class S3ProviderImpl {
    * the engine re-ensures dirs and retries once, then throws).
    */
   async uploadStream(remotePath: string, localPath: string): Promise<boolean> {
+    appendDiagnosticLog('s3', 'upload-stream-start', { remotePath, localPath });
     try {
       const url = await this.presign(HTTP_PUT, remotePath);
       await tauriUpload(url, localPath, 'PUT');
+      appendDiagnosticLog('s3', 'upload-stream-complete', { remotePath, localPath });
       return true;
     } catch (e) {
+      appendDiagnosticLog(
+        's3',
+        'upload-stream-failed',
+        { remotePath, localPath, error: e },
+        'error',
+      );
       console.warn('S3Provider.uploadStream failed', remotePath, e);
       return false;
     }
@@ -339,11 +348,35 @@ class S3ProviderImpl {
 
   /** Streaming download via a presigned GET URL; same contract as upload. */
   async downloadStream(remotePath: string, localPath: string): Promise<boolean> {
+    appendDiagnosticLog('s3', 'download-stream-start', { remotePath, localPath });
     try {
       const url = await this.presign(HTTP_GET, remotePath);
-      await tauriDownload(url, localPath);
+      const responseHeaders = await tauriDownload(url, localPath);
+      appendDiagnosticLog('s3', 'download-stream-complete', {
+        remotePath,
+        localPath,
+        responseHeaders: {
+          acceptRanges: responseHeaders['accept-ranges'],
+          contentLength: responseHeaders['content-length'],
+          contentRange: responseHeaders['content-range'],
+          etag: responseHeaders['etag'],
+          downloadMode: responseHeaders['x-readest-download-mode'],
+          expectedBytes: responseHeaders['x-readest-download-total'],
+          transferredBytes: responseHeaders['x-readest-download-transferred'],
+          partCount: responseHeaders['x-readest-download-part-count'],
+          completedParts: responseHeaders['x-readest-download-completed-parts'],
+          failedParts: responseHeaders['x-readest-download-failed-parts'],
+          fullResponseParts: responseHeaders['x-readest-download-full-response-parts'],
+        },
+      });
       return true;
     } catch (e) {
+      appendDiagnosticLog(
+        's3',
+        'download-stream-failed',
+        { remotePath, localPath, error: e },
+        'error',
+      );
       console.warn('S3Provider.downloadStream failed', remotePath, e);
       return false;
     }
@@ -400,6 +433,7 @@ class S3ProviderImpl {
   /** Throw a status-carrying error for any non-success response. */
   private async ensureOk(res: Response, operation: S3Operation, path: string): Promise<void> {
     if (res.ok || res.status === HTTP_NO_CONTENT) return;
+    appendDiagnosticLog('s3', 'http-failed', { operation, path, status: res.status }, 'error');
     throw new S3HttpError(res.status, `S3 ${operation} failed: HTTP ${res.status} for ${path}`);
   }
 }

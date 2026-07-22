@@ -5,6 +5,12 @@ import { useEnv } from '@/context/EnvContext';
 import { useTranslation, type TranslationFunc } from '@/hooks/useTranslation';
 import { useSettingsStore } from '@/store/settingsStore';
 import { eventDispatcher } from '@/utils/event';
+import {
+  appendDiagnosticLog,
+  clearDiagnosticLog,
+  exportDiagnosticLog,
+  readDiagnosticLog,
+} from '@/utils/diagnosticLog';
 import { FileSyncError } from '@/services/sync/file/provider';
 import { createS3Provider } from '@/services/sync/providers/s3/S3Provider';
 import { SectionTitle } from '../primitives';
@@ -47,7 +53,7 @@ const formatConnectError = (_: TranslationFunc, e: unknown): string => {
 const S3Form: React.FC = () => {
   const _ = useTranslation();
   const { settings, setSettings, saveSettings } = useSettingsStore();
-  const { envConfig } = useEnv();
+  const { envConfig, appService } = useEnv();
 
   const stored = settings.s3;
   const isActive = !!stored?.enabled;
@@ -110,6 +116,54 @@ const S3Form: React.FC = () => {
     await saveSettings(envConfig, next);
   };
 
+  const handleExportDiagnosticLog = async () => {
+    const service = appService ?? (await envConfig.getAppService());
+    appendDiagnosticLog('diagnostics', 'export-requested', {
+      savedEntryCount: readDiagnosticLog().length,
+    });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const saved = await service.saveFile(
+      `readest-s3-diagnostic-${timestamp}.jsonl`,
+      exportDiagnosticLog(),
+      { mimeType: 'application/x-ndjson' },
+    );
+    eventDispatcher.dispatch('toast', {
+      type: saved ? 'info' : 'error',
+      message: saved ? _('Exported successfully') : _('Export failed'),
+    });
+  };
+
+  const handleClearDiagnosticLog = () => {
+    clearDiagnosticLog();
+    appendDiagnosticLog('diagnostics', 'log-cleared');
+    eventDispatcher.dispatch('toast', { type: 'info', message: _('Diagnostic log cleared') });
+  };
+
+  const diagnosticLogPanel = (
+    <div className='space-y-2'>
+      <SectionTitle>{_('Diagnostic Logs')}</SectionTitle>
+      <p className='text-base-content/60 text-sm'>
+        {_('Saved only on this device. Access keys and signed URL queries are redacted.')}
+      </p>
+      <div className='flex justify-end gap-2'>
+        <button
+          type='button'
+          onClick={handleClearDiagnosticLog}
+          className='btn btn-ghost eink-bordered btn-sm h-9 min-h-9'
+        >
+          {_('Clear')}
+        </button>
+        <button
+          type='button'
+          onClick={handleExportDiagnosticLog}
+          className='btn btn-primary btn-sm h-9 min-h-9'
+        >
+          {_('Export')}
+        </button>
+      </div>
+    </div>
+  );
+
   if (isActive) {
     return (
       <div className='space-y-5'>
@@ -130,131 +184,135 @@ const S3Form: React.FC = () => {
             {_('Disconnect')}
           </button>
         </div>
+        {diagnosticLogPanel}
       </div>
     );
   }
 
   return (
-    <form
-      className='space-y-4'
-      onSubmit={(e) => {
-        e.preventDefault();
-        handleConnect();
-      }}
-    >
-      <div className='space-y-1.5'>
-        <SectionTitle as='label' htmlFor='s3-endpoint' className='block'>
-          {_('Endpoint')}
-        </SectionTitle>
-        <input
-          id='s3-endpoint'
-          type='text'
-          placeholder='https://<account-id>.r2.cloudflarestorage.com'
-          className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
-          spellCheck='false'
-          value={endpoint}
-          onChange={(e) => setEndpoint(e.target.value)}
-        />
-      </div>
-
-      <div className='space-y-1.5'>
-        <SectionTitle as='label' htmlFor='s3-bucket' className='block'>
-          {_('Bucket')}
-        </SectionTitle>
-        <input
-          id='s3-bucket'
-          type='text'
-          placeholder='readest'
-          className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
-          spellCheck='false'
-          value={bucket}
-          onChange={(e) => setBucket(e.target.value)}
-        />
-      </div>
-
-      <div className='space-y-1.5'>
-        <SectionTitle as='label' htmlFor='s3-region' className='block'>
-          {_('Region')}
-        </SectionTitle>
-        <input
-          id='s3-region'
-          type='text'
-          placeholder='auto'
-          className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
-          spellCheck='false'
-          value={region}
-          onChange={(e) => setRegion(e.target.value)}
-        />
-      </div>
-
-      <div className='space-y-1.5'>
-        <SectionTitle as='label' htmlFor='s3-access-key-id' className='block'>
-          {_('Access Key ID')}
-        </SectionTitle>
-        <input
-          id='s3-access-key-id'
-          type='text'
-          placeholder={_('Your Access Key ID')}
-          className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
-          spellCheck='false'
-          value={accessKeyId}
-          onChange={(e) => setAccessKeyId(e.target.value)}
-          autoComplete='off'
-        />
-      </div>
-
-      <div className='space-y-1.5'>
-        <SectionTitle as='label' htmlFor='s3-secret-access-key' className='block'>
-          {_('Secret Access Key')}
-        </SectionTitle>
-        <div className='relative'>
+    <div className='space-y-5'>
+      <form
+        className='space-y-4'
+        onSubmit={(e) => {
+          e.preventDefault();
+          handleConnect();
+        }}
+      >
+        <div className='space-y-1.5'>
+          <SectionTitle as='label' htmlFor='s3-endpoint' className='block'>
+            {_('Endpoint')}
+          </SectionTitle>
           <input
-            id='s3-secret-access-key'
-            type={showSecret ? 'text' : 'password'}
-            placeholder={_('Your Secret Access Key')}
-            className='input input-bordered eink-bordered h-11 w-full pe-11 text-sm focus:outline-none'
-            value={secretAccessKey}
-            onChange={(e) => setSecretAccessKey(e.target.value)}
+            id='s3-endpoint'
+            type='text'
+            placeholder='https://<account-id>.r2.cloudflarestorage.com'
+            className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+            spellCheck='false'
+            value={endpoint}
+            onChange={(e) => setEndpoint(e.target.value)}
+          />
+        </div>
+
+        <div className='space-y-1.5'>
+          <SectionTitle as='label' htmlFor='s3-bucket' className='block'>
+            {_('Bucket')}
+          </SectionTitle>
+          <input
+            id='s3-bucket'
+            type='text'
+            placeholder='readest'
+            className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+            spellCheck='false'
+            value={bucket}
+            onChange={(e) => setBucket(e.target.value)}
+          />
+        </div>
+
+        <div className='space-y-1.5'>
+          <SectionTitle as='label' htmlFor='s3-region' className='block'>
+            {_('Region')}
+          </SectionTitle>
+          <input
+            id='s3-region'
+            type='text'
+            placeholder='auto'
+            className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+            spellCheck='false'
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+          />
+        </div>
+
+        <div className='space-y-1.5'>
+          <SectionTitle as='label' htmlFor='s3-access-key-id' className='block'>
+            {_('Access Key ID')}
+          </SectionTitle>
+          <input
+            id='s3-access-key-id'
+            type='text'
+            placeholder={_('Your Access Key ID')}
+            className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+            spellCheck='false'
+            value={accessKeyId}
+            onChange={(e) => setAccessKeyId(e.target.value)}
             autoComplete='off'
           />
+        </div>
+
+        <div className='space-y-1.5'>
+          <SectionTitle as='label' htmlFor='s3-secret-access-key' className='block'>
+            {_('Secret Access Key')}
+          </SectionTitle>
+          <div className='relative'>
+            <input
+              id='s3-secret-access-key'
+              type={showSecret ? 'text' : 'password'}
+              placeholder={_('Your Secret Access Key')}
+              className='input input-bordered eink-bordered h-11 w-full pe-11 text-sm focus:outline-none'
+              value={secretAccessKey}
+              onChange={(e) => setSecretAccessKey(e.target.value)}
+              autoComplete='off'
+            />
+            <button
+              type='button'
+              onClick={() => setShowSecret((v) => !v)}
+              className={clsx(
+                'absolute end-2 top-1/2 -translate-y-1/2',
+                'flex h-8 w-8 items-center justify-center rounded',
+                'text-base-content/60 hover:text-base-content',
+                'hover:bg-base-200/60 transition-colors duration-150',
+                'focus-visible:ring-base-content/15 focus-visible:outline-none focus-visible:ring-2',
+              )}
+              aria-label={showSecret ? _('Hide password') : _('Show password')}
+              title={showSecret ? _('Hide password') : _('Show password')}
+              tabIndex={-1}
+            >
+              {showSecret ? (
+                <MdVisibilityOff className='h-4 w-4' />
+              ) : (
+                <MdVisibility className='h-4 w-4' />
+              )}
+            </button>
+          </div>
+        </div>
+
+        <div className='flex justify-end pt-1'>
           <button
-            type='button'
-            onClick={() => setShowSecret((v) => !v)}
+            type='submit'
+            disabled={isConnecting || !canSubmit}
             className={clsx(
-              'absolute end-2 top-1/2 -translate-y-1/2',
-              'flex h-8 w-8 items-center justify-center rounded',
-              'text-base-content/60 hover:text-base-content',
-              'hover:bg-base-200/60 transition-colors duration-150',
-              'focus-visible:ring-base-content/15 focus-visible:outline-none focus-visible:ring-2',
+              'btn btn-contrast',
+              'h-10 min-h-10 rounded-lg border-0 px-5 text-sm font-medium',
+              'focus-visible:ring-base-content/40 focus-visible:outline-none focus-visible:ring-2',
+              isConnecting && 'opacity-60',
             )}
-            aria-label={showSecret ? _('Hide password') : _('Show password')}
-            title={showSecret ? _('Hide password') : _('Show password')}
-            tabIndex={-1}
           >
-            {showSecret ? (
-              <MdVisibilityOff className='h-4 w-4' />
-            ) : (
-              <MdVisibility className='h-4 w-4' />
-            )}
+            {isConnecting ? <span className='loading loading-spinner loading-sm' /> : _('Connect')}
           </button>
         </div>
-      </div>
-
-      <div className='flex justify-end pt-1'>
-        <button
-          type='submit'
-          disabled={isConnecting || !canSubmit}
-          className={clsx(
-            'btn btn-contrast',
-            'h-10 min-h-10 rounded-lg border-0 px-5 text-sm font-medium',
-            'focus-visible:ring-base-content/40 focus-visible:outline-none focus-visible:ring-2',
-            isConnecting && 'opacity-60',
-          )}
-        >
-          {isConnecting ? <span className='loading loading-spinner loading-sm' /> : _('Connect')}
-        </button>
-      </div>
-    </form>
+      </form>
+      {diagnosticLogPanel}
+    </div>
   );
 };
 

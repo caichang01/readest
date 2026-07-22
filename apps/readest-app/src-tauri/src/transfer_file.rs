@@ -19,7 +19,13 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use read_progress_stream::ReadProgressStream;
 
 use std::time::Instant;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -220,6 +226,13 @@ pub async fn download_file(
         }
         file.flush().await?;
 
+        resp_headers.insert("x-readest-download-mode".into(), "single".into());
+        resp_headers.insert("x-readest-download-total".into(), total.to_string());
+        resp_headers.insert(
+            "x-readest-download-transferred".into(),
+            stats.total_transferred.to_string(),
+        );
+
         Ok(resp_headers)
     }
 
@@ -267,6 +280,9 @@ pub async fn download_file(
 
     let file = Arc::new(tokio::sync::Mutex::new(file));
     let progress = Arc::new(tokio::sync::Mutex::new(TransferStats::default()));
+    let completed_parts = Arc::new(AtomicU64::new(0));
+    let failed_parts = Arc::new(AtomicU64::new(0));
+    let full_response_parts = Arc::new(AtomicU64::new(0));
 
     stream::iter(0..part_count)
         .for_each_concurrent(8, |i| {
@@ -276,6 +292,9 @@ pub async fn download_file(
             let headers = headers.clone();
             let url = url.to_string();
             let on_progress = on_progress.clone();
+            let completed_parts = Arc::clone(&completed_parts);
+            let failed_parts = Arc::clone(&failed_parts);
+            let full_response_parts = Arc::clone(&full_response_parts);
 
             async move {
                 let start = i * PART_SIZE;
@@ -289,18 +308,28 @@ pub async fn download_file(
 
                 let resp = match req.send().await {
                     Ok(r) => r,
-                    Err(_) => return,
+                    Err(_) => {
+                        failed_parts.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
                 };
 
                 if !resp.status().is_success()
                     && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT
                 {
+                    failed_parts.fetch_add(1, Ordering::Relaxed);
                     return;
+                }
+                if resp.status() == reqwest::StatusCode::OK {
+                    full_response_parts.fetch_add(1, Ordering::Relaxed);
                 }
 
                 let bytes = match resp.bytes().await {
                     Ok(b) => b,
-                    Err(_) => return,
+                    Err(_) => {
+                        failed_parts.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
                 };
 
                 {
@@ -318,9 +347,34 @@ pub async fn download_file(
                         transfer_speed: stat.transfer_speed,
                     });
                 }
+                completed_parts.fetch_add(1, Ordering::Relaxed);
             }
         })
         .await;
+
+    let transferred = progress.lock().await.total_transferred;
+    resp_headers.insert("x-readest-download-mode".into(), "multipart".into());
+    resp_headers.insert("x-readest-download-total".into(), total.to_string());
+    resp_headers.insert(
+        "x-readest-download-transferred".into(),
+        transferred.to_string(),
+    );
+    resp_headers.insert(
+        "x-readest-download-part-count".into(),
+        part_count.to_string(),
+    );
+    resp_headers.insert(
+        "x-readest-download-completed-parts".into(),
+        completed_parts.load(Ordering::Relaxed).to_string(),
+    );
+    resp_headers.insert(
+        "x-readest-download-failed-parts".into(),
+        failed_parts.load(Ordering::Relaxed).to_string(),
+    );
+    resp_headers.insert(
+        "x-readest-download-full-response-parts".into(),
+        full_response_parts.load(Ordering::Relaxed).to_string(),
+    );
 
     Ok(resp_headers)
 }
