@@ -21,6 +21,7 @@ import {
   RemoteLibraryIndex,
 } from './wire';
 import { mergeBookConfig, mergeBookMetadata, shouldApplyRemoteBookMetadata } from './merge';
+import { appendDiagnosticLog } from '@/utils/diagnosticLog';
 
 export type SyncStrategy = 'silent' | 'send' | 'receive';
 
@@ -436,7 +437,21 @@ export class FileSyncEngine {
     const fileEntry = entries.find(
       (e) => !e.isDirectory && e.name !== SYNC_BOOK_CONFIG_FILE && e.name !== SYNC_BOOK_COVER_FILE,
     );
-    if (!fileEntry) return false;
+    if (!fileEntry) {
+      appendDiagnosticLog('file-sync', 'book-download-file-missing', {
+        bookHash: book.hash,
+        directory: dirPath,
+      });
+      return false;
+    }
+
+    appendDiagnosticLog('file-sync', 'book-download-start', {
+      bookHash: book.hash,
+      format: book.format,
+      remotePath: fileEntry.path,
+      remoteSize: fileEntry.size,
+      streaming: !!this.provider.downloadStream,
+    });
 
     let written = false;
     if (this.provider.downloadStream) {
@@ -449,6 +464,32 @@ export class FileSyncEngine {
         written = true;
       }
     }
+    let localSize: number | null = null;
+    if (written) {
+      try {
+        localSize = (await this.store.resolveLocalBookPath(book))?.size ?? null;
+      } catch (e) {
+        appendDiagnosticLog(
+          'file-sync',
+          'book-download-local-stat-failed',
+          { bookHash: book.hash, error: e },
+          'warning',
+        );
+      }
+    }
+    appendDiagnosticLog(
+      'file-sync',
+      written ? 'book-download-complete' : 'book-download-failed',
+      {
+        bookHash: book.hash,
+        remotePath: fileEntry.path,
+        remoteSize: fileEntry.size,
+        localSize,
+        sizeMatches:
+          fileEntry.size === undefined || localSize === null ? null : fileEntry.size === localSize,
+      },
+      written ? 'info' : 'error',
+    );
     if (!written) return false;
 
     try {
@@ -494,6 +535,13 @@ export class FileSyncEngine {
    * counted so one bad apple never aborts the rest of the library.
    */
   async syncLibrary(books: Book[], options: SyncLibraryOptions): Promise<SyncLibraryResult> {
+    appendDiagnosticLog('file-sync', 'library-sync-start', {
+      localBookCount: books.length,
+      strategy: options.strategy,
+      syncBooks: options.syncBooks,
+      fullSync: options.fullSync ?? false,
+      concurrency: options.concurrency ?? 4,
+    });
     const result: SyncLibraryResult = {
       totalBooks: books.length,
       configsUploaded: 0,
@@ -661,6 +709,7 @@ export class FileSyncEngine {
     // directory listing — NOT the book's title (which may be stale). We always
     // resolve the path by listing the hash dir.
     const explicitRemotePaths = new Map<string, string>();
+    const explicitRemoteSizes = new Map<string, number | undefined>();
 
     // Metadata reconciliation for books present BOTH locally and in the shared
     // library.json (#4756). Last-writer-wins on `book.updatedAt`: when a peer's
@@ -863,8 +912,15 @@ export class FileSyncEngine {
               };
 
           explicitRemotePaths.set(hash, fileEntry.path);
+          explicitRemoteSizes.set(hash, fileEntry.size);
           remoteBooksToDownload.push(book);
           allBooksMap.set(hash, book);
+          appendDiagnosticLog('file-sync', 'remote-book-discovered', {
+            bookHash: hash,
+            format,
+            remotePath: fileEntry.path,
+            remoteSize: fileEntry.size,
+          });
         } catch (e) {
           noteAbort(e);
           console.warn('file sync: failed to inspect hash dir', hash, e);
@@ -890,6 +946,14 @@ export class FileSyncEngine {
           downloadStarted += 1;
           try {
             const explicitPath = explicitRemotePaths.get(rb.hash);
+            const remoteSize = explicitRemoteSizes.get(rb.hash);
+            appendDiagnosticLog('file-sync', 'remote-book-download-start', {
+              bookHash: rb.hash,
+              format: rb.format,
+              remotePath: explicitPath,
+              remoteSize,
+              streaming: !!this.provider.downloadStream,
+            });
             // Prefer the streaming downloader. On Tauri/Android we MUST take
             // this path — moving a 30 MB epub through the WebView<->Rust IPC
             // bridge as a single Uint8Array crashes the renderer.
@@ -906,6 +970,25 @@ export class FileSyncEngine {
               }
             }
             if (written) {
+              let localSize: number | null = null;
+              try {
+                localSize = (await this.store.resolveLocalBookPath(rb))?.size ?? null;
+              } catch (e) {
+                appendDiagnosticLog(
+                  'file-sync',
+                  'remote-book-local-stat-failed',
+                  { bookHash: rb.hash, error: e },
+                  'warning',
+                );
+              }
+              appendDiagnosticLog('file-sync', 'remote-book-download-complete', {
+                bookHash: rb.hash,
+                remotePath: explicitPath,
+                remoteSize,
+                localSize,
+                sizeMatches:
+                  remoteSize === undefined || localSize === null ? null : remoteSize === localSize,
+              });
               try {
                 const coverBytes = await this.pullBookCover(rb.hash);
                 if (coverBytes) await this.store.saveBookCover(rb, coverBytes);
@@ -934,6 +1017,12 @@ export class FileSyncEngine {
               // Record it so a later push-side sync doesn't HEAD-probe it back.
               uploadedHashes.add(rb.hash);
             } else {
+              appendDiagnosticLog(
+                'file-sync',
+                'remote-book-download-failed',
+                { bookHash: rb.hash, remotePath: explicitPath, remoteSize },
+                'error',
+              );
               // No bytes returned (typically a 404 we couldn't resolve).
               result.failures += 1;
               result.failedBooks.push({
@@ -945,6 +1034,12 @@ export class FileSyncEngine {
               console.warn('file sync: book download produced no bytes', rb.hash, explicitPath);
             }
           } catch (e) {
+            appendDiagnosticLog(
+              'file-sync',
+              'remote-book-download-threw',
+              { bookHash: rb.hash, remotePath: explicitRemotePaths.get(rb.hash), error: e },
+              'error',
+            );
             noteAbort(e);
             result.failures += 1;
             result.failedBooks.push({
@@ -1173,6 +1268,12 @@ export class FileSyncEngine {
     }
 
     result.booksSynced = syncedHashes.size;
+    appendDiagnosticLog(
+      'file-sync',
+      result.failures > 0 ? 'library-sync-finished-with-failures' : 'library-sync-complete',
+      result,
+      result.failures > 0 ? 'warning' : 'info',
+    );
     return result;
   }
 }

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import {
+  Book,
   BookContent,
   BookConfig,
   PageInfo,
@@ -30,6 +31,27 @@ import { BookData, useBookDataStore } from './bookDataStore';
 import { useLibraryStore } from './libraryStore';
 import { clearBookProgress, getBookProgress, setBookProgress } from './readerProgressStore';
 import { uniqueId } from '@/utils/misc';
+import { appendDiagnosticLog } from '@/utils/diagnosticLog';
+
+interface DiagnosticFileInfo {
+  name: string;
+  size: number;
+  type: string;
+  signatureHex: string | null;
+}
+
+const inspectFileForDiagnostics = async (file: File): Promise<DiagnosticFileInfo> => {
+  let signatureHex: string | null = null;
+  try {
+    const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    signatureHex = Array.from(bytes)
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+  } catch {
+    // The size/name still help when a platform-specific File cannot be sliced.
+  }
+  return { name: file.name, size: file.size, type: file.type, signatureHex };
+};
 
 interface ViewState {
   /* Unique key for each book view */
@@ -172,10 +194,14 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
         },
       },
     }));
+    let diagnosticStage = 'initialize';
+    let diagnosticBook: Book | null = null;
+    let diagnosticFile: DiagnosticFileInfo | null = null;
     try {
       const appService = await envConfig.getAppService();
       const { settings } = useSettingsStore.getState();
       const { getBookByHash, library } = useLibraryStore.getState();
+      diagnosticStage = 'lookup-library-entry';
       const book = getBookByHash(id);
       if (!book) {
         console.error(
@@ -183,6 +209,15 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
         );
         throw new Error('Book not found');
       }
+      diagnosticBook = book;
+      appendDiagnosticLog('reader', 'book-open-start', {
+        bookHash: book.hash,
+        format: book.format,
+        uploadedAt: book.uploadedAt,
+        downloadedAt: book.downloadedAt,
+        hasFilePath: !!book.filePath,
+        hasUrl: !!book.url,
+      });
       const isPseStream = !!book.url && isPseStreamFileName(book.url);
       const isFeed = !!book.url && isFeedBookUrl(book.url);
       let bookDoc = bookData?.bookDoc;
@@ -201,20 +236,33 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
           bookDoc = await openFeedBookDoc(fs, book.hash, feedUrl, book.title);
           file = null;
         } else {
+          diagnosticStage = 'load-local-book-file';
           const content = (await appService.loadBookContent(book)) as BookContent;
           file = content.file;
+          diagnosticFile = await inspectFileForDiagnostics(file);
+          appendDiagnosticLog('reader', 'local-book-file-opened', {
+            bookHash: book.hash,
+            ...diagnosticFile,
+          });
           let nativeFilePath: string | null = null;
           try {
             nativeFilePath = await appService.resolveNativeBookFilePath(book);
           } catch (err) {
             console.warn('resolveNativeBookFilePath failed', err);
           }
+          diagnosticStage = 'parse-book-document';
           const doc = await new DocumentLoader(file, {
             nativeFilePath: nativeFilePath ?? undefined,
           }).open();
           bookDoc = doc.book;
+          appendDiagnosticLog('reader', 'book-document-parsed', {
+            bookHash: book.hash,
+            format: book.format,
+            sectionCount: bookDoc.sections?.length ?? 0,
+          });
         }
       }
+      diagnosticStage = 'load-book-config';
       const config = await appService.loadBookConfig(book, settings);
       // Import annotations from third-party readers on first open
       if (bookDoc.metadata.identifier) {
@@ -320,6 +368,26 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
         },
       }));
     } catch (error) {
+      appendDiagnosticLog(
+        'reader',
+        'book-open-failed',
+        {
+          stage: diagnosticStage,
+          book: diagnosticBook
+            ? {
+                hash: diagnosticBook.hash,
+                format: diagnosticBook.format,
+                uploadedAt: diagnosticBook.uploadedAt,
+                downloadedAt: diagnosticBook.downloadedAt,
+                hasFilePath: !!diagnosticBook.filePath,
+                hasUrl: !!diagnosticBook.url,
+              }
+            : null,
+          file: diagnosticFile,
+          error,
+        },
+        'error',
+      );
       console.error(error);
       set((state) => ({
         viewStates: {

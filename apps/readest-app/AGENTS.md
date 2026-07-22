@@ -73,6 +73,10 @@ Project-related agent context lives under `.agents/`, which is a symlink to `.cl
 - `.agents/plans/` — active or archived implementation plans
 - `.agents/rules/` — project rules for test-first work, TypeScript, verification, and related workflows
 
+### Fork development context
+
+Before making fork-specific changes, read [`docs/fork-development-handoff.md`](docs/fork-development-handoff.md). It records the removal of membership gates, custom cloud-storage behavior, fork release CI, S3 diagnostics, known test baselines, and the next planned repair work. Update it after each completed fork milestone.
+
 ## Project Rules
 
 Rules are in `.agents/rules/`: test-first, typescript, verification.
