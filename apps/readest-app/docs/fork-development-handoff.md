@@ -8,9 +8,9 @@
 
 当前 Git 状态（截至最后更新）：
 
-- `master` 与 `origin/master` 位于 `89a55d1e merge: automate GitHub releases`。
-- S3 诊断工作位于 `codex/s3-diagnostic-apk`，诊断代码提交为 `be075e04`；本交接文档也在该分支维护。
-- 诊断分支尚未合并到 `master`、尚未推送；应在后续修复和真机验收完成后再决定是否合并。
+- 本地 `master` 位于 `d7f0e9ca merge: add production S3 diagnostics`，已包含诊断功能和生产化收敛；`origin/master` 仍位于 `89a55d1e merge: automate GitHub releases`，尚未推送。
+- 正式修复在 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`。
+- 修复分支尚未合并、尚未推送；应在真机验收完成后再经用户授权合并到 `master` 并推送。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
 
 ## 1. 当前目标和长期约定
@@ -253,44 +253,50 @@ pnpm tauri android build -t aarch64 -- --features devtools
 
 目前没有证据支持“必须登录才能打开从 S3 同步的书籍”。
 
-## 5. 下一阶段修复方案
+## 5. S3 书籍完整性正式修复
 
-修复应继续在新的独立分支中进行，并采用测试先行。建议拆为以下顺序：
+分支：`codex/fix-s3-book-recovery`
 
-1. 为“本地文件不存在但缓存/index 未变化”增加失败测试。
-2. 在增量同步提前跳过前，校验本地文件存在性和远端/本地大小。
-3. Rust multipart 下载要求每个分片都成功；任一请求、状态码或 body 失败必须让总体下载失败。
-4. 校验 HTTP Range 语义、最终传输字节数和落盘文件大小，不能只以文件存在作为成功依据。
-5. 书籍条目在文件未准备好时显示下载状态，禁止直接交给阅读器解析。
-6. 打开书籍遇到文件缺失或明显不完整时，允许从当前第三方 provider 自动重新下载一次，然后再打开；必须防止无限重试。
-7. 将“完全同步”改成语义明确的一次性“重新检查并修复”操作，或确保开关与自动同步行为一致。当前自动同步在 `useLibraryFileSync.ts` 中固定传入 `fullSync:false`，只有设置页的手动 Sync now 才读取该开关。
+提交：`2bae62ab fix: recover incomplete synced books`
 
-验收场景至少包括：
+已经完成：
 
-- 设备 B 第一次连接已有 S3，等待文件完成后可以打开。
-- 元数据先到、文件后到时不会显示误导性的可打开状态。
-- 删除设备 B 的本地书籍文件后，普通同步可以自愈。
-- 制造本地短文件或大小不匹配后，普通同步可以重新下载。
-- 模拟一个分片失败时，同步明确失败且不会写入成功标记。
-- S3 服务端忽略 Range、返回 HTTP 200 全对象时，不会拼接出损坏文件。
-- 不登录账户、只配置 S3 时仍可完成书籍同步和打开。
+1. 流式和缓冲下载只有在落盘文件存在、且本地大小与远端对象大小一致时才记为成功；不完整文件不会再写入 `downloadedAt` 或加入书架。
+2. 普通增量同步会对远端已确认存在的书籍做轻量本地文件检查。本地文件被删除时，即使 `library.json` ETag 没变化，也会重新下载并更新已有书籍记录。
+3. Rust multipart 下载要求每个分片都是 HTTP 206，`Content-Range`、分片边界、对象总大小和 body 长度必须完全匹配；任一请求、读、seek 或 write 失败都会让总体下载失败。
+4. 单线程下载在服务端提供 `Content-Length` 时也会校验最终传输字节数。
+5. 阅读器在 app 管理的本地书籍加载或解析失败时，如果当前使用 S3/WebDAV/Drive 且远端有副本，会自动重新下载、持久化书籍记录并重试一次。外部文件、RSS/PSE 流和 Readest Cloud 不走该恢复路径；一次性保护避免无限循环。
+6. 设置中的“Full Sync（完全同步）”改为一次性操作：它只影响下一次手动同步，执行完成后自动关闭；普通自动同步仍使用增量模式。
+7. 原有本地诊断功能继续保留，并新增恢复开始、完成、失败及大小不匹配等事件。
+
+自动化测试已经覆盖：
+
+- 远端新书正常下载并加入本地书架。
+- 短文件/大小不匹配不会记为成功。
+- 本地文件丢失且远端 ETag 未变化时仍会自愈。
+- HTTP 200 全对象不能冒充 Range 分片；短分片和错误 `Content-Range` 会被拒绝。
+- 阅读器第一次解析失败后恢复并重试；恢复最多执行一次。
+
+仍需真机验收：设备 A 上传，设备 B 在不登录 Readest 账户的情况下只配置同一 S3，普通同步后直接打开；还应分别尝试删除本地文件和使用一次“完全同步”。
 
 ## 6. 测试与已知基线
 
-诊断提交 `be075e04` 的验证结果：
+正式修复提交 `2bae62ab` 的验证结果：
 
-- `pnpm lint`：通过，检查 1661 个文件。
-- 诊断与文件同步相关 Vitest：6 个文件、65 条测试全部通过。
-- `cargo fmt -p Readest`：通过。
-- `cargo clippy -p Readest --no-deps -- -D warnings`：通过；输出中仍有工作区上游依赖自身的警告。
-- `cargo test -p Readest --lib`：83/83 通过。
-- Next.js Android 生产前端构建和 TypeScript 检查：通过。
-- Android ARM64 release 构建：通过。
+- `pnpm lint`：通过，检查 1663 个文件。
+- 文件同步相关 Vitest：13 个文件、152 条测试全部通过。
+- 文件同步加阅读器相关 Vitest：14 个文件、177 条测试全部通过。
+- `rustfmt --check src/transfer_file.rs`：通过。
+- `cargo clippy --lib`：通过；工作区上游依赖仍输出既有 warning。附加 `-D warnings` 会被上游 `tauri-utils` 的 MSRV warning 阻断，不是本次代码产生。
+- `cargo test -p Readest --lib`：86/86 通过。
+- TypeScript 检查和 Biome lint：通过。
+- Android ARM64 release 构建（不启用 devtools）：通过，同时生成 unsigned APK 和 AAB。
+- 真机验收 APK：`artifacts/readest-s3-recovery-arm64.apk`，75,899,751 bytes，SHA-256 `72706f152cec40cfbfe6460111a0f2c6ad55001373d0431cb1553fb10dd4cf15`；使用本机 Android debug 证书签名，APK v2/v3 校验通过，仅供测试。
 
 全量 `pnpm test` 的结果：
 
-- 539 个测试文件中 538 个通过。
-- 7252 条测试中 7246 条通过、3 条跳过、3 条失败。
+- 540 个测试文件中 539 个通过。
+- 7259 条测试中 7253 条通过、3 条跳过、3 条失败。
 - 失败全部位于 `src/__tests__/database/turso-node.test.ts` 的向量 L2 距离精度断言。
 - 示例：期望 `5.0`，实际约 `4.99704122543335`；期望 `sqrt(2)`，实际约 `1.414939284324646`。
 - 这是诊断改动之前已存在的 Turso/SQLite 向量实现或精度基线问题，与 S3 日志功能无关。
@@ -334,6 +340,7 @@ pnpm --filter @readest/readest-app exec vitest run \
 | 云 provider 选择 | `src/services/sync/cloudSyncProvider.ts` |
 | 文件 provider 注册 | `src/services/sync/file/providerRegistry.ts` |
 | 文件同步引擎 | `src/services/sync/file/engine.ts` |
+| 阅读器第三方存储恢复 | `src/services/sync/file/readerBookRecovery.ts` |
 | 自动文件同步 | `src/app/library/hooks/useLibraryFileSync.ts` |
 | 通用同步设置 UI | `src/components/settings/integrations/FileSyncForm.tsx` |
 | S3 设置 UI | `src/components/settings/integrations/S3Form.tsx` |
