@@ -477,9 +477,13 @@ export class FileSyncEngine {
         );
       }
     }
+    const verified =
+      written &&
+      localSize !== null &&
+      (fileEntry.size === undefined || fileEntry.size === localSize);
     appendDiagnosticLog(
       'file-sync',
-      written ? 'book-download-complete' : 'book-download-failed',
+      verified ? 'book-download-complete' : 'book-download-failed',
       {
         bookHash: book.hash,
         remotePath: fileEntry.path,
@@ -488,9 +492,9 @@ export class FileSyncEngine {
         sizeMatches:
           fileEntry.size === undefined || localSize === null ? null : fileEntry.size === localSize,
       },
-      written ? 'info' : 'error',
+      verified ? 'info' : 'error',
     );
-    if (!written) return false;
+    if (!verified) return false;
 
     try {
       const coverBytes = await this.pullBookCover(book.hash);
@@ -705,6 +709,38 @@ export class FileSyncEngine {
     }
 
     const remoteBooksToDownload: Book[] = [];
+    const callerBookHashes = new Set(books.map((book) => book.hash));
+    // Audit the local path for every remote-backed row. This is a local stat,
+    // not a remote request; when bytes vanished it bypasses an unchanged index
+    // ETag and repairs the device. Full Sync additionally compares every real
+    // local size with the remote listing below.
+    const repairCandidates = new Set<string>();
+    const repairLocalSizes = new Map<string, number | null>();
+    if (canPull) {
+      for (const book of books) {
+        if (book.deletedAt || !uploadedHashes.has(book.hash)) continue;
+        try {
+          const local = await this.store.resolveLocalBookPath(book);
+          const localSize = local?.size ?? null;
+          repairLocalSizes.set(book.hash, localSize);
+          if (localSize === null || fullSync) repairCandidates.add(book.hash);
+          if (localSize !== null && !hasLocalFile(book)) {
+            const repaired = { ...book, downloadedAt: Date.now() };
+            await this.store.updateBookMetadata(repaired);
+            allBooksMap.set(book.hash, repaired);
+          }
+        } catch (e) {
+          repairLocalSizes.set(book.hash, null);
+          repairCandidates.add(book.hash);
+          appendDiagnosticLog(
+            'file-sync',
+            'book-repair-local-stat-failed',
+            { bookHash: book.hash, error: e },
+            'warning',
+          );
+        }
+      }
+    }
     // The remote source of truth for a book's on-disk filename is the per-hash
     // directory listing — NOT the book's title (which may be stale). We always
     // resolve the path by listing the hash dir.
@@ -823,20 +859,22 @@ export class FileSyncEngine {
     // become visible without library.json changing... except a no-index
     // legacy upload, which is still picked up on the first run of a session
     // (cold cache) and on Full Sync.
-    if (canPull && (!remoteIndexUnchanged || fullSync)) {
+    if (canPull && (!remoteIndexUnchanged || fullSync || repairCandidates.size > 0)) {
       const candidateHashes = new Set<string>();
 
       // 1) Seed with hashes from the remote index (when the file exists).
       if (remoteIndex && remoteIndex.books) {
         for (const rb of remoteIndex.books) {
-          if (!allBooksMap.has(rb.hash) && !rb.deletedAt) {
+          if ((!allBooksMap.has(rb.hash) || repairCandidates.has(rb.hash)) && !rb.deletedAt) {
             candidateHashes.add(rb.hash);
             // Provisionally register the indexed book — fields refreshed below
             // once we've inspected the actual hash dir. Strip the pushing
             // device's local fields: an index written by an older client still
             // carries its `filePath`, and adopting it would make this device
             // read the book as a purely-local record (#5084).
-            allBooksMap.set(rb.hash, stripDeviceLocalFields(rb));
+            if (!allBooksMap.has(rb.hash)) {
+              allBooksMap.set(rb.hash, stripDeviceLocalFields(rb));
+            }
           }
         }
       }
@@ -850,7 +888,7 @@ export class FileSyncEngine {
         for (const entry of dirEntries) {
           if (!entry.isDirectory) continue;
           remoteHashDirs.add(entry.name);
-          if (!allBooksMap.has(entry.name)) {
+          if (!allBooksMap.has(entry.name) || repairCandidates.has(entry.name)) {
             candidateHashes.add(entry.name);
           }
         }
@@ -913,6 +951,16 @@ export class FileSyncEngine {
 
           explicitRemotePaths.set(hash, fileEntry.path);
           explicitRemoteSizes.set(hash, fileEntry.size);
+          const localSize = repairLocalSizes.get(hash);
+          if (
+            fullSync &&
+            localSize !== null &&
+            localSize !== undefined &&
+            fileEntry.size !== undefined &&
+            localSize === fileEntry.size
+          ) {
+            continue;
+          }
           remoteBooksToDownload.push(book);
           allBooksMap.set(hash, book);
           appendDiagnosticLog('file-sync', 'remote-book-discovered', {
@@ -969,8 +1017,8 @@ export class FileSyncEngine {
                 written = true;
               }
             }
+            let localSize: number | null = null;
             if (written) {
-              let localSize: number | null = null;
               try {
                 localSize = (await this.store.resolveLocalBookPath(rb))?.size ?? null;
               } catch (e) {
@@ -981,6 +1029,12 @@ export class FileSyncEngine {
                   'warning',
                 );
               }
+            }
+            const verified =
+              written &&
+              localSize !== null &&
+              (remoteSize === undefined || remoteSize === localSize);
+            if (verified) {
               appendDiagnosticLog('file-sync', 'remote-book-download-complete', {
                 bookHash: rb.hash,
                 remotePath: explicitPath,
@@ -1011,7 +1065,12 @@ export class FileSyncEngine {
               // We just pulled its bytes, so the file is on the remote: the row is
               // cloud-backed (#5084) and addBookToLibrary persists the stamp.
               rb.uploadedAt = Date.now();
-              await this.store.addBookToLibrary(rb);
+              rb.downloadedAt = Date.now();
+              if (callerBookHashes.has(rb.hash)) {
+                await this.store.updateBookMetadata(rb);
+              } else {
+                await this.store.addBookToLibrary(rb);
+              }
               result.booksDownloaded += 1;
               syncedHashes.add(rb.hash);
               // Record it so a later push-side sync doesn't HEAD-probe it back.
@@ -1020,7 +1079,7 @@ export class FileSyncEngine {
               appendDiagnosticLog(
                 'file-sync',
                 'remote-book-download-failed',
-                { bookHash: rb.hash, remotePath: explicitPath, remoteSize },
+                { bookHash: rb.hash, remotePath: explicitPath, remoteSize, localSize },
                 'error',
               );
               // No bytes returned (typically a 404 we couldn't resolve).
@@ -1029,7 +1088,10 @@ export class FileSyncEngine {
                 hash: rb.hash,
                 title: rb.title || rb.hash,
                 phase: 'download',
-                reason: 'No bytes returned (file may have been moved or deleted on the server)',
+                reason:
+                  written && remoteSize !== undefined
+                    ? `Downloaded file size mismatch (${localSize ?? 'unavailable'}/${remoteSize} bytes)`
+                    : 'No complete file was written (file may have been moved or deleted on the server)',
               });
               console.warn('file sync: book download produced no bytes', rb.hash, explicitPath);
             }

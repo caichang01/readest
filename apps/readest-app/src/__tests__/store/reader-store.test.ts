@@ -1,7 +1,13 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import type { FoliateView } from '@/types/view';
 import type { Insets } from '@/types/misc';
-import type { ViewSettings } from '@/types/book';
+import type { Book, ViewSettings } from '@/types/book';
+import type { EnvConfigType } from '@/services/environment';
+
+const readerMocks = vi.hoisted(() => ({
+  documentOpen: vi.fn(),
+  recover: vi.fn(),
+}));
 
 vi.mock('@/store/bookDataStore', async () => {
   const { create } = await import('zustand');
@@ -53,7 +59,12 @@ vi.mock('@/services/constants', () => ({
   SUPPORTED_LANGNAMES: {},
 }));
 vi.mock('@/libs/document', () => ({
-  DocumentLoader: vi.fn(),
+  DocumentLoader: vi.fn(function MockDocumentLoader() {
+    return { open: readerMocks.documentOpen };
+  }),
+}));
+vi.mock('@/services/sync/file/readerBookRecovery', () => ({
+  tryRecoverThirdPartyBook: readerMocks.recover,
 }));
 vi.mock('@/services/opds/pseStream', () => ({
   isPseStreamFileName: () => false,
@@ -70,6 +81,7 @@ vi.mock('@/services/rss/feedReader', () => ({
 
 import { useReaderStore } from '@/store/readerStore';
 import { useBookDataStore } from '@/store/bookDataStore';
+import { useLibraryStore } from '@/store/libraryStore';
 
 /**
  * Helper to seed a minimal ViewState in the store for a given key.
@@ -107,6 +119,8 @@ describe('readerStore', () => {
       hoveredBookKey: null,
     });
     useBookDataStore.setState({ booksData: {} });
+    readerMocks.documentOpen.mockReset();
+    readerMocks.recover.mockReset();
   });
 
   describe('initial state', () => {
@@ -115,6 +129,47 @@ describe('readerStore', () => {
       expect(state.viewStates).toEqual({});
       expect(state.bookKeys).toEqual([]);
       expect(state.hoveredBookKey).toBeNull();
+    });
+  });
+
+  describe('initViewState recovery', () => {
+    test('re-downloads once and retries parsing after a managed book is corrupt', async () => {
+      const book = {
+        hash: 'bookid',
+        format: 'PDF',
+        title: 'Book',
+        author: 'A',
+        createdAt: 1,
+        updatedAt: 1,
+        uploadedAt: 10,
+        downloadedAt: 10,
+      } as Book;
+      vi.mocked(useLibraryStore.getState().getBookByHash).mockReturnValue(book);
+      readerMocks.recover.mockResolvedValue({ ...book, downloadedAt: 20 });
+      readerMocks.documentOpen
+        .mockRejectedValueOnce(new Error('corrupt file'))
+        .mockResolvedValueOnce({
+          book: {
+            metadata: {},
+            sections: [],
+            rendition: {},
+          },
+        });
+      const appService = {
+        loadBookContent: vi.fn(async () => ({ file: new File(['valid'], 'Book.pdf') })),
+        resolveNativeBookFilePath: vi.fn(async () => null),
+        loadBookConfig: vi.fn(async () => ({ updatedAt: 1, booknotes: [], viewSettings: {} })),
+      };
+      const envConfig = {
+        getAppService: vi.fn(async () => appService),
+      } as unknown as EnvConfigType;
+
+      await useReaderStore.getState().initViewState(envConfig, 'bookid', 'bookid-0', true, true);
+
+      expect(readerMocks.recover).toHaveBeenCalledTimes(1);
+      expect(readerMocks.recover).toHaveBeenCalledWith(envConfig, book, 'parse-book-document');
+      expect(readerMocks.documentOpen).toHaveBeenCalledTimes(2);
+      expect(useReaderStore.getState().getViewState('bookid-0')?.error).toBeNull();
     });
   });
 

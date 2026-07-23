@@ -134,6 +134,57 @@ fn ensure_path_allowed(app: &AppHandle, file_path: &str) -> Result<()> {
     Err(Error::Forbidden(file_path.to_string()))
 }
 
+/// A ranged response is safe to place at `start` only when the server returned
+/// exactly the requested slice. Some S3-compatible gateways ignore `Range`
+/// and return HTTP 200/the whole object; accepting that for every part corrupts
+/// the preallocated destination while still making the command report success.
+fn validate_range_part(
+    status: reqwest::StatusCode,
+    content_range: Option<&str>,
+    start: u64,
+    end: u64,
+    total: u64,
+    body_len: usize,
+) -> Result<()> {
+    if status != reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(Error::ContentLength(format!(
+            "range bytes={start}-{end} returned HTTP {status}, expected 206"
+        )));
+    }
+
+    let value = content_range.ok_or_else(|| {
+        Error::ContentLength(format!("range bytes={start}-{end} omitted Content-Range"))
+    })?;
+    let (bounds, response_total) = value
+        .strip_prefix("bytes ")
+        .and_then(|value| value.split_once('/'))
+        .ok_or_else(|| Error::ContentLength(format!("invalid Content-Range: {value}")))?;
+    let (response_start, response_end) = bounds
+        .split_once('-')
+        .ok_or_else(|| Error::ContentLength(format!("invalid Content-Range: {value}")))?;
+    let response_start = response_start
+        .parse::<u64>()
+        .map_err(|_| Error::ContentLength(format!("invalid Content-Range: {value}")))?;
+    let response_end = response_end
+        .parse::<u64>()
+        .map_err(|_| Error::ContentLength(format!("invalid Content-Range: {value}")))?;
+    let response_total = response_total
+        .parse::<u64>()
+        .map_err(|_| Error::ContentLength(format!("invalid Content-Range: {value}")))?;
+    let expected_len = end - start + 1;
+
+    if response_start != start
+        || response_end != end
+        || response_total != total
+        || body_len as u64 != expected_len
+    {
+        return Err(Error::ContentLength(format!(
+            "range mismatch: requested bytes={start}-{end}/{total}, received {value} ({body_len} bytes)"
+        )));
+    }
+    Ok(())
+}
+
 impl Serialize for Error {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -226,6 +277,13 @@ pub async fn download_file(
         }
         file.flush().await?;
 
+        if total > 0 && stats.total_transferred != total {
+            return Err(Error::ContentLength(format!(
+                "download incomplete: expected {total} bytes, received {}",
+                stats.total_transferred
+            )));
+        }
+
         resp_headers.insert("x-readest-download-mode".into(), "single".into());
         resp_headers.insert("x-readest-download-total".into(), total.to_string());
         resp_headers.insert(
@@ -284,8 +342,8 @@ pub async fn download_file(
     let failed_parts = Arc::new(AtomicU64::new(0));
     let full_response_parts = Arc::new(AtomicU64::new(0));
 
-    stream::iter(0..part_count)
-        .for_each_concurrent(8, |i| {
+    let part_results = stream::iter(0..part_count)
+        .map(|i| {
             let client = client.clone();
             let file = Arc::clone(&file);
             let progress = Arc::clone(&progress);
@@ -297,59 +355,63 @@ pub async fn download_file(
             let full_response_parts = Arc::clone(&full_response_parts);
 
             async move {
-                let start = i * PART_SIZE;
-                let end = min(start + PART_SIZE - 1, total - 1);
-                let range_header = format!("bytes={start}-{end}");
+                let result: Result<()> = async {
+                    let start = i * PART_SIZE;
+                    let end = min(start + PART_SIZE - 1, total - 1);
+                    let range_header = format!("bytes={start}-{end}");
 
-                let mut req = client.get(&url).header("Range", range_header);
-                for (key, value) in headers {
-                    req = req.header(key, value);
-                }
-
-                let resp = match req.send().await {
-                    Ok(r) => r,
-                    Err(_) => {
-                        failed_parts.fetch_add(1, Ordering::Relaxed);
-                        return;
+                    let mut req = client.get(&url).header("Range", range_header);
+                    for (key, value) in headers {
+                        req = req.header(key, value);
                     }
-                };
 
-                if !resp.status().is_success()
-                    && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT
-                {
-                    failed_parts.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-                if resp.status() == reqwest::StatusCode::OK {
-                    full_response_parts.fetch_add(1, Ordering::Relaxed);
-                }
-
-                let bytes = match resp.bytes().await {
-                    Ok(b) => b,
-                    Err(_) => {
-                        failed_parts.fetch_add(1, Ordering::Relaxed);
-                        return;
+                    let resp = req.send().await?;
+                    if resp.status() == reqwest::StatusCode::OK {
+                        full_response_parts.fetch_add(1, Ordering::Relaxed);
                     }
-                };
-
-                {
-                    let mut f = file.lock().await;
-                    f.seek(std::io::SeekFrom::Start(start)).await.unwrap();
-                    f.write_all(&bytes).await.unwrap();
-                }
-
-                {
-                    let mut stat = progress.lock().await;
-                    stat.record_chunk_transfer(bytes.len());
-                    let _ = on_progress.send(ProgressPayload {
-                        progress: stat.total_transferred,
+                    let status = resp.status();
+                    let content_range = resp
+                        .headers()
+                        .get(reqwest::header::CONTENT_RANGE)
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned);
+                    let bytes = resp.bytes().await?;
+                    validate_range_part(
+                        status,
+                        content_range.as_deref(),
+                        start,
+                        end,
                         total,
-                        transfer_speed: stat.transfer_speed,
-                    });
+                        bytes.len(),
+                    )?;
+
+                    {
+                        let mut f = file.lock().await;
+                        f.seek(std::io::SeekFrom::Start(start)).await?;
+                        f.write_all(&bytes).await?;
+                    }
+
+                    {
+                        let mut stat = progress.lock().await;
+                        stat.record_chunk_transfer(bytes.len());
+                        let _ = on_progress.send(ProgressPayload {
+                            progress: stat.total_transferred,
+                            total,
+                            transfer_speed: stat.transfer_speed,
+                        });
+                    }
+                    completed_parts.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
                 }
-                completed_parts.fetch_add(1, Ordering::Relaxed);
+                .await;
+                if result.is_err() {
+                    failed_parts.fetch_add(1, Ordering::Relaxed);
+                }
+                result
             }
         })
+        .buffer_unordered(8)
+        .collect::<Vec<_>>()
         .await;
 
     let transferred = progress.lock().await.total_transferred;
@@ -375,6 +437,16 @@ pub async fn download_file(
         "x-readest-download-full-response-parts".into(),
         full_response_parts.load(Ordering::Relaxed).to_string(),
     );
+
+    if let Some(error) = part_results.into_iter().find_map(Result::err) {
+        return Err(error);
+    }
+    if completed_parts.load(Ordering::Relaxed) != part_count || transferred != total {
+        return Err(Error::ContentLength(format!(
+            "multipart download incomplete: {}/{part_count} parts, {transferred}/{total} bytes",
+            completed_parts.load(Ordering::Relaxed)
+        )));
+    }
 
     Ok(resp_headers)
 }
@@ -438,7 +510,47 @@ fn file_to_body(channel: Channel<ProgressPayload>, file: File, file_len: u64) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{has_disallowed_components, is_within_app_storage};
+    use super::{has_disallowed_components, is_within_app_storage, validate_range_part};
+
+    #[test]
+    fn accepts_an_exact_partial_content_part() {
+        assert!(validate_range_part(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            Some("bytes 1048576-1048584/2000000"),
+            1048576,
+            1048584,
+            2_000_000,
+            9,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_full_response_for_a_range_part() {
+        assert!(validate_range_part(reqwest::StatusCode::OK, None, 0, 8, 100, 9,).is_err());
+    }
+
+    #[test]
+    fn rejects_short_or_misdirected_range_parts() {
+        assert!(validate_range_part(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            Some("bytes 0-8/100"),
+            0,
+            8,
+            100,
+            8,
+        )
+        .is_err());
+        assert!(validate_range_part(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            Some("bytes 1-9/100"),
+            0,
+            8,
+            100,
+            9,
+        )
+        .is_err());
+    }
 
     #[test]
     fn app_storage_fallback_accepts_app_paths() {

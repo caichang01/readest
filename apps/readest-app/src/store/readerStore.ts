@@ -32,6 +32,9 @@ import { useLibraryStore } from './libraryStore';
 import { clearBookProgress, getBookProgress, setBookProgress } from './readerProgressStore';
 import { uniqueId } from '@/utils/misc';
 import { appendDiagnosticLog } from '@/utils/diagnosticLog';
+import { tryRecoverThirdPartyBook } from '@/services/sync/file/readerBookRecovery';
+
+const readerRecoveryAttempts = new Set<string>();
 
 interface DiagnosticFileInfo {
   name: string;
@@ -368,6 +371,30 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
         },
       }));
     } catch (error) {
+      const recoveryKey = `${id}:${key}`;
+      if (diagnosticBook && !readerRecoveryAttempts.has(recoveryKey)) {
+        readerRecoveryAttempts.add(recoveryKey);
+        try {
+          const recovered = await tryRecoverThirdPartyBook(
+            envConfig,
+            diagnosticBook,
+            diagnosticStage,
+          );
+          if (recovered) {
+            await get().initViewState(envConfig, id, key, isPrimary, true);
+            return;
+          }
+        } catch (recoveryError) {
+          appendDiagnosticLog(
+            'reader',
+            'book-recovery-threw',
+            { bookHash: diagnosticBook.hash, failedStage: diagnosticStage, error: recoveryError },
+            'error',
+          );
+        } finally {
+          readerRecoveryAttempts.delete(recoveryKey);
+        }
+      }
       appendDiagnosticLog(
         'reader',
         'book-open-failed',
