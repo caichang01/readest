@@ -1,6 +1,6 @@
 # Readest fork 二次开发交接记录
 
-最后更新：2026-07-23
+最后更新：2026-07-27
 
 这份文档记录本 fork 相对上游 Readest 的产品目标、已经完成的改造、验证结果、已知问题和后续计划。开始新的 fork 专属开发前，应先阅读本文；完成一个阶段后，应同步更新日期、提交、测试结果和未完成事项。
 
@@ -9,6 +9,7 @@
 当前 Git 状态（截至最后更新）：
 
 - `master` 已合并生产化诊断功能和经过真机验收的 S3 书籍恢复修复。
+- 自建 Supabase 登录与数据库接入正在分支 `codex/self-hosted-supabase-auth` 开发；Auth 和数据库基线已完成真实环境验收，客户端/API 地址改造尚未完成，因此不得提前合并到 `master`。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -114,6 +115,43 @@
 - 设置副本、阅读统计、字典、字体、纹理和部分账户数据仍可通过 Readest Cloud/副本同步处理。
 - 选择第三方 provider 后，Readest Cloud 不再上传书籍文件；第三方 provider 成为书籍文件的主要存储位置。
 - 因此，纯本地加自定义 S3 可以不登录；需要跨设备账户数据同步时，登录仍有意义。
+
+### 3.3.1 自建 Supabase 接入进度
+
+开发分支：`codex/self-hosted-supabase-auth`
+
+2026-07-27 已完成服务器端第一阶段：
+
+- 目标环境为 Pigsty 管理的 PostgreSQL 18.4 和自托管 Supabase；不启动项目 `docker/compose.yaml` 中的第二套 PostgreSQL/Auth/Kong。
+- 自托管 Auth 的 `JWT_SECRET`、`ANON_KEY`、`SERVICE_ROLE_KEY` 已统一轮换并验证 Admin API。
+- 首个用户已创建并确认，随后通过 Pigsty 源配置设置 `DISABLE_SIGNUP=true`；未来仍可由管理员创建用户或临时重新开放注册。
+- 登录系统公开域名、HTTPS、Kong、GoTrue 和 PostgREST 已完成健康验证。仓库不得记录实际域名、IP、邮箱或密钥。
+- 用户选择保留完整 Supabase 服务栈并不配置 Swap；这是部署决策，不应通过代码擅自停用服务。
+
+数据库部署新增 `docker/volumes/db/self-hosted/`：
+
+- `bootstrap.sh` 将当前基础 schema 与空库所需历史迁移组装后，通过标准输入交给管理员 `psql`。
+- 基线在单个事务中执行；失败自动回滚。
+- `readest_internal.schema_migrations` 记录基线版本，重复执行成功退出且不修改数据库。
+- 已存在 Readest 表但没有预期版本记录时，脚本拒绝猜测和覆盖。
+- `verify.sql` 验证 12 张业务表、RLS、同步列、replica allowlist 和迁移记录。
+- `test-bootstrap.sh` 验证迁移选择，排除已折叠迁移和不能放进事务的在线迁移 016，并阻止生成 SQL 出现 ESC 控制字符。
+
+真实环境验收结果：
+
+- 第一次执行发现迁移提示行的 `\echo` 被 Bash `printf` 解释为 ESC 控制字符；`ON_ERROR_STOP` 触发后整个事务正确回滚，没有残留业务表。
+- 修复生成方式并增加回归断言后，首次基线应用成功。
+- 独立验收得到 1 个已确认 Auth 用户、12 张 Readest 表和 44 条 RLS policy。
+- 第二次执行命中版本记录并安全跳过。
+- 仓库级测试入口为 `pnpm test:self-hosted-db`。
+
+下一阶段：
+
+1. 修改客户端构建配置，使 Android/桌面安装包使用自建 Supabase 公网 URL 和客户端 `ANON_KEY`。
+2. 部署 fork 自己的 Readest Web/API 服务，并通过仅服务端可见的 `SERVICE_ROLE_KEY` 访问 Supabase。
+3. 配置 Auth redirect/deep-link allowlist。
+4. 执行客户端登录、令牌刷新、登出、跨设备书籍元数据/进度/笔记同步测试。
+5. 完成上述测试前，不把本分支合并到 `master`。
 
 ### 3.4 fork 专用 GitHub Actions
 
