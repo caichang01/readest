@@ -2,7 +2,9 @@ name: Fork Web and API Image
 
 on:
   push:
-    branches: [master]
+    branches:
+      - master
+      - codex/**
   workflow_dispatch:
 
 permissions:
@@ -41,8 +43,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/readest
           tags: |
-            type=raw,value=master
-            type=raw,value=latest
+            type=raw,value=master,enable=${{ github.ref == 'refs/heads/master' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
             type=sha,prefix=sha-
 
       - name: Build and push image

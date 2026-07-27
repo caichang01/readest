@@ -152,7 +152,9 @@
   `NEXT_PUBLIC_SUPABASE_ANON_KEY`、`NEXT_PUBLIC_API_BASE_URL`；缺失、占位符、非 HTTPS
   或多行值会中止，不能继续回退到上游后端。
 - `.github/workflows/fork-web-image.yml` 只构建 Linux x64 的 fork Web/API 镜像并发布
-  到当前仓库所有者的 GHCR；没有恢复上游 Docker Hub、多架构或正式部署流程。
+  到当前仓库所有者的 GHCR；`codex/**` 开发分支只发布不可变 `sha-*` 候选标签，
+  `master` 才更新 `master` 和 `latest`，没有恢复上游 Docker Hub、多架构或正式部署
+  流程。
 - `docker/compose.external-supabase.yaml` 只启动 Readest Web/API，不管理 Pigsty 或现有
   Supabase 容器。`docker/.env.external-supabase.example` 将客户端 anon key 与仅服务端
   `service_role` key 明确分离。

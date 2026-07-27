@@ -14,6 +14,9 @@ ghcr.io/<GitHub 用户名>/readest:latest
 ghcr.io/<GitHub 用户名>/readest:sha-<短提交号>
 ```
 
+推送 `codex/**` 开发分支时只发布不可变的 `sha-<短提交号>` 候选标签，不会更新
+`master` 或 `latest`。因此可以先在真实环境验收候选镜像，再合并到 `master`。
+
 部署时优先固定 `sha-*` 标签，验证完成后再更新到新提交。如果 GHCR Package 不是公开
 可读，需要先在服务器上执行 `docker login ghcr.io`。
 
