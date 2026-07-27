@@ -182,6 +182,18 @@
 - 本机没有 PostgreSQL、`psql` 或 Docker，因此实际 SQL 执行、PostgREST schema cache
   刷新和 RPC 返回值集成验证留给已备份的 Pigsty 测试步骤；完成前不宣称真实迁移通过。
 
+2026-07-27 Pigsty 真实迁移验证：
+
+- `sudo -iu postgres pig pb backup` 成功完成 pgBackRest S3 增量备份，备份结束与保留
+  清理均正常；仓库不记录实际 bucket、endpoint 或密钥。
+- 017 → 018 升级在单个事务中成功执行：创建 RPC、撤销 `PUBLIC` 权限、授予
+  `service_role` 表读取与函数执行权限、写入迁移台账、发送 PostgREST reload 通知后
+  提交。
+- `verify.sql` 执行通过，得到 1 个 Auth 用户、12 张 Readest 表、44 条 RLS policy；
+  台账同时包含 017 基线与 `018_add_storage_stats_rpc`。
+- 尚待重复运行 `upgrade.sh` 验证安全跳过，并从 Readest Web/API 日志确认不再出现
+  `get_storage_by_book_hash` 的 `PGRST202` 回退警告。
+
 2026-07-27 完成客户端与 Web/API 配置阶段：
 
 - `.github/scripts/prepare-fork-env.mjs` 从 GitHub Variables/Secret 生成原生构建专用 `.env.local`。
@@ -214,8 +226,7 @@
 
 下一阶段：
 
-1. 在 Pigsty PostgreSQL 上执行 `sudo -iu postgres pig pb backup`，成功后运行
-   `self-hosted/upgrade.sh` 和 `verify.sql`。
+1. 再次运行 `self-hosted/upgrade.sh`，确认命中迁移台账并安全跳过。
 2. 重新访问账户存储管理页面，确认 Web/API 日志不再出现
    `get_storage_by_book_hash` 的 `PGRST202` 回退。
 3. 使用真实后端地址构建新的 Android 与桌面候选安装包。
