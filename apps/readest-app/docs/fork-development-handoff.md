@@ -230,10 +230,20 @@
 - 本机没有 Docker CLI，`docker compose config` 尚未执行；YAML 与 dotenv 静态语法
   检查通过，必须在目标服务器部署前补跑 compose config。
 
+2026-07-27 原生候选安装包构建：
+
+- 在 `codex/self-hosted-supabase-auth` 分支的提交 `4e97c670` 上手动运行
+  `Fork Release Installers`，参数为 `publish_release=false`。
+- 元数据、Android、Windows x64、Windows ARM64、Linux x64、Linux ARM64 和 macOS
+  Universal 作业全部成功；Android 同时完成 APK 签名与 zipalign 验证。
+- `Publish GitHub Release` 按预期跳过，没有创建标签或正式 Release。
+- 六组 Actions artifacts 已上传并保留 30 天，用于安装后的登录、会话恢复和跨设备同步
+  验收。
+
 下一阶段：
 
-1. 使用真实后端地址构建新的 Android 与桌面候选安装包。
-2. 执行令牌刷新、登出、跨设备书籍元数据/进度/笔记与自定义 S3 真机同步测试。
+1. 安装 Android 与 macOS 候选包，验证登录、应用重启后的会话恢复、登出和重新登录。
+2. 执行跨设备书籍元数据、进度、笔记、设置与自定义 S3 真机同步测试。
 3. 完成上述测试前，不把本分支合并到 `master`。
 
 ### 3.4 fork 专用 GitHub Actions
