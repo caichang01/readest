@@ -127,6 +127,9 @@
 - 首个用户已创建并确认，随后通过 Pigsty 源配置设置 `DISABLE_SIGNUP=true`；未来仍可由管理员创建用户或临时重新开放注册。
 - 登录系统公开域名、HTTPS、Kong、GoTrue 和 PostgREST 已完成健康验证。仓库不得记录实际域名、IP、邮箱或密钥。
 - 用户选择保留完整 Supabase 服务栈并不配置 Swap；这是部署决策，不应通过代码擅自停用服务。
+- PostgreSQL 已通过 Pigsty 配置 pgBackRest、S3 备份仓库和 PITR。此环境今后执行
+  Readest 数据库迁移前，标准备份命令统一为 `sudo -iu postgres pig pb backup`；
+  命令成功后再迁移，不默认追加临时 `pg_dump`。
 
 数据库部署新增 `docker/volumes/db/self-hosted/`：
 
@@ -211,7 +214,8 @@
 
 下一阶段：
 
-1. 在已备份的 Pigsty PostgreSQL 上执行 `self-hosted/upgrade.sh`，再运行 `verify.sql`。
+1. 在 Pigsty PostgreSQL 上执行 `sudo -iu postgres pig pb backup`，成功后运行
+   `self-hosted/upgrade.sh` 和 `verify.sql`。
 2. 重新访问账户存储管理页面，确认 Web/API 日志不再出现
    `get_storage_by_book_hash` 的 `PGRST202` 回退。
 3. 使用真实后端地址构建新的 Android 与桌面候选安装包。

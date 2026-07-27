@@ -62,7 +62,22 @@ sudo -iu postgres psql -d postgres -X -v ON_ERROR_STOP=1 \
 ## Upgrade an existing baseline 017 deployment
 
 Take a PostgreSQL backup first. Do not rerun `bootstrap.sh` against the existing
-Readest tables. Apply the forward migration with:
+Readest tables.
+
+For the verified Pigsty deployment, PostgreSQL is already protected by
+pgBackRest with an S3 repository and PITR. Run the Pigsty-managed backup command
+before each Readest database migration:
+
+```bash
+sudo -iu postgres pig pb backup
+```
+
+Confirm that the command completes successfully before continuing. This is the
+preferred migration backup path for that environment; an additional ad-hoc
+`pg_dump` is not required unless a separate logical backup is explicitly
+requested.
+
+After the managed backup succeeds, apply the forward migration with:
 
 ```bash
 docker/volumes/db/self-hosted/upgrade.sh \

@@ -124,7 +124,13 @@ public.get_storage_by_book_hash(p_user_id)
 警告，并在文件记录较多时增加数据库传输和进程内存消耗。它不是 Auth、网络或自定义 S3
 凭据错误。
 
-对已经安装 `20260727_self_hosted_baseline_017` 的数据库，应先备份，再按
-`docker/volumes/db/self-hosted/README.md` 运行 `upgrade.sh`。迁移成功后 PostgREST 会
-收到 schema cache reload 通知，无需重启 Readest 容器。再次打开账户存储管理页面时，
-日志中不应再出现该 `PGRST202` 回退警告。
+对已经安装 `20260727_self_hosted_baseline_017` 的 Pigsty 数据库，应先使用现有
+pgBackRest S3/PITR 体系执行备份：
+
+```bash
+sudo -iu postgres pig pb backup
+```
+
+确认备份成功后，再按 `docker/volumes/db/self-hosted/README.md` 运行 `upgrade.sh`。
+迁移成功后 PostgREST 会收到 schema cache reload 通知，无需重启 Readest 容器。再次
+打开账户存储管理页面时，日志中不应再出现该 `PGRST202` 回退警告。
