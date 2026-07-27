@@ -1,5 +1,10 @@
 # Self-Hosting with Docker/Podman with Compose
 
+Already operate Supabase separately (for example through Pigsty)? Use
+[`EXTERNAL_SUPABASE.md`](EXTERNAL_SUPABASE.md) and
+`compose.external-supabase.yaml` to start only the Readest Web/API container.
+That path does not create, stop, or replace the existing Supabase services.
+
 ## Stack
 
 | service         | Image                       | Description                                       |

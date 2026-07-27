@@ -9,7 +9,7 @@
 当前 Git 状态（截至最后更新）：
 
 - `master` 已合并生产化诊断功能和经过真机验收的 S3 书籍恢复修复。
-- 自建 Supabase 登录与数据库接入正在分支 `codex/self-hosted-supabase-auth` 开发；Auth 和数据库基线已完成真实环境验收，客户端/API 地址改造尚未完成，因此不得提前合并到 `master`。
+- 自建 Supabase 登录与数据库接入正在分支 `codex/self-hosted-supabase-auth` 开发；Auth、数据库基线、客户端构建配置和 Web/API 部署模板已经完成，尚未配置真实 Readest API 域名并执行真机登录/同步验收，因此不得提前合并到 `master`。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -145,12 +145,42 @@
 - 第二次执行命中版本记录并安全跳过。
 - 仓库级测试入口为 `pnpm test:self-hosted-db`。
 
+2026-07-27 完成客户端与 Web/API 配置阶段：
+
+- `.github/scripts/prepare-fork-env.mjs` 从 GitHub Variables/Secret 生成原生构建专用 `.env.local`。
+- Android 和桌面 fork Release 构建现在必须提供 `NEXT_PUBLIC_SUPABASE_URL`、
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY`、`NEXT_PUBLIC_API_BASE_URL`；缺失、占位符、非 HTTPS
+  或多行值会中止，不能继续回退到上游后端。
+- `.github/workflows/fork-web-image.yml` 只构建 Linux x64 的 fork Web/API 镜像并发布
+  到当前仓库所有者的 GHCR；没有恢复上游 Docker Hub、多架构或正式部署流程。
+- `docker/compose.external-supabase.yaml` 只启动 Readest Web/API，不管理 Pigsty 或现有
+  Supabase 容器。`docker/.env.external-supabase.example` 将客户端 anon key 与仅服务端
+  `service_role` key 明确分离。
+- `docker/EXTERNAL_SUPABASE.md` 记录镜像部署、反向代理、回调 allowlist、GitHub 配置和
+  最小验收顺序，不包含真实域名、IP、邮箱或密钥。
+- GoTrue 回调最少需要 Readest Web 的 `/auth/callback` 精确 HTTPS URL 与
+  `readest://auth-callback`；现有 Tauri 配置已注册 `readest` scheme，无需改 Rust。
+
+本阶段验证：
+
+- `node --test .github/scripts/*.test.mjs`：8 条通过。
+- `pnpm lint`（Node 24.14.0）：通过。
+- `pnpm format:check`：通过。
+- `BUILD_STANDALONE=true pnpm --filter @readest/readest-app build-web`（Node 24.14.0，
+  使用虚拟 HTTPS 配置）：通过，生成 standalone server 和动态 `/runtime-config.js`。
+- 全量 `pnpm test`（Node 24.14.0）：539 个测试文件、7253 条测试通过；仅
+  `turso-node.test.ts` 中 3 条既有向量距离浮点精度断言失败，与本阶段改动无关。
+- 本机没有 Docker CLI，`docker compose config` 尚未执行；YAML 与 dotenv 静态语法
+  检查通过，必须在目标服务器部署前补跑 compose config。
+
 下一阶段：
 
-1. 修改客户端构建配置，使 Android/桌面安装包使用自建 Supabase 公网 URL 和客户端 `ANON_KEY`。
-2. 部署 fork 自己的 Readest Web/API 服务，并通过仅服务端可见的 `SERVICE_ROLE_KEY` 访问 Supabase。
-3. 配置 Auth redirect/deep-link allowlist。
-4. 执行客户端登录、令牌刷新、登出、跨设备书籍元数据/进度/笔记同步测试。
+1. 在 GitHub 设置两个 Variables 和一个 Secret，并在 Pigsty 源配置加入两个 Auth
+   redirect allowlist 项。
+2. 用 fork GHCR 镜像部署 Readest Web/API，完成公网 HTTPS 和 `/runtime-config.js`
+   检查。
+3. 使用真实地址生成 Android 测试 APK。
+4. 执行登录、令牌刷新、登出、跨设备书籍元数据/进度/笔记与自定义 S3 真机同步测试。
 5. 完成上述测试前，不把本分支合并到 `master`。
 
 ### 3.4 fork 专用 GitHub Actions
