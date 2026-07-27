@@ -110,3 +110,21 @@ anon key 本质上是客户端公开凭据，即使放在 GitHub Secret 中，�
 5. 验证自定义 S3 书籍上传、另一设备恢复及直接打开。
 6. 最后检查 Readest 与 Supabase 服务端日志中没有 401、403、RLS 或 JWT signature
    错误。
+
+## 7. 存储统计 RPC 升级
+
+如果 Readest Web/API 日志出现以下 PostgREST 错误：
+
+```text
+PGRST202: Could not find the function
+public.get_storage_by_book_hash(p_user_id)
+```
+
+登录和同步仍会继续工作，因为 API 会退回分页查询并在 Node.js 中聚合；但这会产生重复
+警告，并在文件记录较多时增加数据库传输和进程内存消耗。它不是 Auth、网络或自定义 S3
+凭据错误。
+
+对已经安装 `20260727_self_hosted_baseline_017` 的数据库，应先备份，再按
+`docker/volumes/db/self-hosted/README.md` 运行 `upgrade.sh`。迁移成功后 PostgREST 会
+收到 schema cache reload 通知，无需重启 Readest 容器。再次打开账户存储管理页面时，
+日志中不应再出现该 `PGRST202` 回退警告。

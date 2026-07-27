@@ -13,9 +13,49 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1
     FROM readest_internal.schema_migrations
-    WHERE version = '20260727_self_hosted_baseline_017'
+    WHERE version IN (
+      '20260727_self_hosted_baseline_017',
+      '20260727_self_hosted_baseline_018'
+    )
   ) THEN
     RAISE EXCEPTION 'Readest self-hosted baseline record is missing';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM readest_internal.schema_migrations
+    WHERE version = '018_add_storage_stats_rpc'
+  ) THEN
+    RAISE EXCEPTION 'Readest storage statistics migration record is missing';
+  END IF;
+
+  IF to_regprocedure('public.get_storage_by_book_hash(uuid)') IS NULL THEN
+    RAISE EXCEPTION 'Readest storage statistics RPC is missing';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    CROSS JOIN LATERAL aclexplode(
+      COALESCE(p.proacl, acldefault('f', p.proowner))
+    ) acl
+    WHERE p.oid = 'public.get_storage_by_book_hash(uuid)'::regprocedure
+      AND acl.grantee = 0
+      AND acl.privilege_type = 'EXECUTE'
+  ) THEN
+    RAISE EXCEPTION 'Readest storage statistics RPC is executable by PUBLIC';
+  END IF;
+
+  IF NOT has_function_privilege(
+    'service_role',
+    'public.get_storage_by_book_hash(uuid)',
+    'EXECUTE'
+  ) THEN
+    RAISE EXCEPTION 'Readest storage statistics RPC is not executable by service_role';
+  END IF;
+
+  IF NOT has_table_privilege('service_role', 'public.files', 'SELECT') THEN
+    RAISE EXCEPTION 'Readest files table is not readable by service_role';
   END IF;
 
   SELECT array_agg(expected.name ORDER BY expected.name)

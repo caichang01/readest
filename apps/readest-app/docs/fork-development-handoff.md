@@ -9,7 +9,7 @@
 当前 Git 状态（截至最后更新）：
 
 - `master` 已合并生产化诊断功能和经过真机验收的 S3 书籍恢复修复。
-- 自建 Supabase 登录与数据库接入正在分支 `codex/self-hosted-supabase-auth` 开发；Auth、数据库基线、客户端构建配置和 Web/API 部署模板已经完成，尚未配置真实 Readest API 域名并执行真机登录/同步验收，因此不得提前合并到 `master`。
+- 自建 Supabase 登录与数据库接入正在分支 `codex/self-hosted-supabase-auth` 开发；Auth、数据库基线、客户端构建配置、Web/API 部署和登录验收已经完成，存储统计 RPC 修复正在合并前验证，因此尚不得提前合并到 `master`。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -145,6 +145,40 @@
 - 第二次执行命中版本记录并安全跳过。
 - 仓库级测试入口为 `pnpm test:self-hosted-db`。
 
+2026-07-27 的 Web/API 候选部署与登录验收：
+
+- 开发分支推送会构建仅含不可变 `sha-*` 标签的 Linux x64 GHCR 候选镜像，不会覆盖
+  `master` 或 `latest`。
+- 候选镜像已确认可匿名拉取，并部署到 QNAP Container Station；QNAP 反向代理为
+  Readest 提供 HTTPS，Supabase 保持运行在同一 NAS 内的独立 Rocky Linux 虚拟机。
+- `/runtime-config.js`、Readest Web 和已执行的登录流程均验证成功。仓库只记录部署
+  拓扑和结果，不记录实际域名、IP、邮箱、anon key 或 `service_role` key。
+- 运行日志发现 API 调用 `public.get_storage_by_book_hash(p_user_id)` 时收到
+  `PGRST202`。上游 API 带有分页回退，所以登录和同步未失败；调查确认根因是上游代码
+  引入 RPC 调用时没有同步提交数据库函数。
+
+存储统计 RPC 正式修复：
+
+- 新增 `018_add_storage_stats_rpc.sql`，在 PostgreSQL 内按 `book_hash` 聚合未软删除
+  文件的数量和总大小，并保持 API 所需的 camelCase 返回字段。
+- RPC 使用 `SECURITY INVOKER`，撤销 `PUBLIC` 执行权限，只允许 Readest 服务端使用的
+  `service_role` 调用，并显式保证该角色拥有 `files` 的最小读取权限。
+- 当前 `schema.sql` 和新装自建基线更新到 018；现有 017 基线不得重跑 bootstrap，
+  而是使用新增的 `self-hosted/upgrade.sh` 前向迁移。
+- `upgrade.sh` 在独立事务中执行迁移、记录台账并通知 PostgREST 刷新 schema cache；
+  重复执行安全跳过。
+- `verify.sql` 新增函数签名、018 迁移记录、`PUBLIC` 禁权和 `service_role` 授权检查。
+- `pnpm test:self-hosted-db` 同时覆盖新装基线与 017 → 018 升级 SQL 生成。
+
+本修复的本地验证：
+
+- `pnpm test:self-hosted-db`：新装基线与升级生成测试均通过。
+- `bash -n`、`git diff --check`、`pnpm format:check` 和 `pnpm lint`：通过。
+- Node 24.14.0 全量 `pnpm test`：539 个测试文件通过，7253 条测试通过；仍只有
+  `turso-node.test.ts` 中 3 条既有向量距离浮点精度断言失败，与本数据库迁移无关。
+- 本机没有 PostgreSQL、`psql` 或 Docker，因此实际 SQL 执行、PostgREST schema cache
+  刷新和 RPC 返回值集成验证留给已备份的 Pigsty 测试步骤；完成前不宣称真实迁移通过。
+
 2026-07-27 完成客户端与 Web/API 配置阶段：
 
 - `.github/scripts/prepare-fork-env.mjs` 从 GitHub Variables/Secret 生成原生构建专用 `.env.local`。
@@ -177,12 +211,11 @@
 
 下一阶段：
 
-1. 在 GitHub 设置两个 Variables 和一个 Secret，并在 Pigsty 源配置加入两个 Auth
-   redirect allowlist 项。
-2. 用 fork GHCR 镜像部署 Readest Web/API，完成公网 HTTPS 和 `/runtime-config.js`
-   检查。
-3. 使用真实地址生成 Android 测试 APK。
-4. 执行登录、令牌刷新、登出、跨设备书籍元数据/进度/笔记与自定义 S3 真机同步测试。
+1. 在已备份的 Pigsty PostgreSQL 上执行 `self-hosted/upgrade.sh`，再运行 `verify.sql`。
+2. 重新访问账户存储管理页面，确认 Web/API 日志不再出现
+   `get_storage_by_book_hash` 的 `PGRST202` 回退。
+3. 使用真实后端地址构建新的 Android 与桌面候选安装包。
+4. 执行令牌刷新、登出、跨设备书籍元数据/进度/笔记与自定义 S3 真机同步测试。
 5. 完成上述测试前，不把本分支合并到 `master`。
 
 ### 3.4 fork 专用 GitHub Actions

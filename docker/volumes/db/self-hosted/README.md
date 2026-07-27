@@ -14,17 +14,23 @@ It does not start another PostgreSQL, Auth, Kong, Storage, or Studio stack.
 
 The following historical migrations are intentionally not replayed:
 
-- `001`, `013`, `015`, and `017` are already represented in `schema.sql`;
+- `001`, `013`, `015`, `017`, and `018` are already represented in `schema.sql`;
 - `016` is a live-table backfill using `CREATE INDEX CONCURRENTLY` and
   transaction-controlling procedures, while its final column, index, and
   trigger are already represented in `schema.sql`.
 
 The assembled baseline runs in one transaction. It records
-`20260727_self_hosted_baseline_017` in
+`20260727_self_hosted_baseline_018` and the folded
+`018_add_storage_stats_rpc` migration in
 `readest_internal.schema_migrations`. A repeated run exits successfully
 without changing the database. If Readest tables exist without that record,
 the script stops instead of guessing whether the database is partially
 initialized.
+
+Migration 018 adds `public.get_storage_by_book_hash(uuid)`, the storage-manager
+aggregation RPC used by the Readest API. It returns camelCase PostgREST fields,
+excludes soft-deleted files, runs as `SECURITY INVOKER`, and is executable only
+by `service_role`.
 
 ## Prerequisites
 
@@ -53,17 +59,38 @@ sudo -iu postgres psql -d postgres -X -v ON_ERROR_STOP=1 \
   < docker/volumes/db/self-hosted/verify.sql
 ```
 
-Before applying to a non-empty deployment, take a PostgreSQL backup and inspect
-the existing schema. Do not use this fresh-install baseline to upgrade an
-older Readest database; add and apply a forward migration instead.
+## Upgrade an existing baseline 017 deployment
+
+Take a PostgreSQL backup first. Do not rerun `bootstrap.sh` against the existing
+Readest tables. Apply the forward migration with:
+
+```bash
+docker/volumes/db/self-hosted/upgrade.sh \
+  sudo -iu postgres psql -d postgres -X
+```
+
+The upgrade runner accepts baseline 017 or 018, checks the migration ledger,
+applies only unapplied forward migrations in their own transaction, records
+`018_add_storage_stats_rpc`, and notifies PostgREST to reload its schema cache.
+A repeated run exits successfully without changing the database.
+
+Run `verify.sql` afterward. It checks the RPC signature, migration record,
+absence of `PUBLIC` execute permission, and the `service_role` function and
+table grants in addition to the existing table, RLS, and replica checks.
+
+Before applying to any non-empty deployment, take a PostgreSQL backup and
+inspect the existing schema. Do not use the fresh-install baseline as an
+upgrade mechanism.
 
 ## Local generation test
 
-The lightweight test verifies the assembled SQL includes the intended
-migrations and excludes the live-data or already-folded migrations:
+The lightweight tests verify the assembled baseline and forward-upgrade SQL,
+including the storage RPC signature and permission boundary. They also exclude
+live-data or already-folded migrations from the baseline:
 
 ```bash
 docker/volumes/db/self-hosted/test-bootstrap.sh
+docker/volumes/db/self-hosted/test-upgrade.sh
 ```
 
 The same test is available from the repository root:

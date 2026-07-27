@@ -4,7 +4,7 @@
   "repository": "readest/readest",
   "scripts": {
     "test": "pnpm --filter @readest/readest-app test",
-    "test:self-hosted-db": "bash docker/volumes/db/self-hosted/test-bootstrap.sh",
+    "test:self-hosted-db": "bash docker/volumes/db/self-hosted/test-bootstrap.sh && bash docker/volumes/db/self-hosted/test-upgrade.sh",
     "test:lua": "pnpm --filter @readest/readest-app test:lua",
     "lint": "pnpm --filter @readest/readest-app lint",
     "lint:lua": "pnpm --filter @readest/readest-app lint:lua",

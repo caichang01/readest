@@ -6,7 +6,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DB_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 INIT_SCHEMA="$DB_DIR/init/schema.sql"
 MIGRATIONS_DIR="$DB_DIR/migrations"
-BASELINE_VERSION="20260727_self_hosted_baseline_017"
+BASELINE_VERSION="20260727_self_hosted_baseline_018"
+PREVIOUS_BASELINE_VERSION="20260727_self_hosted_baseline_017"
+STORAGE_STATS_MIGRATION_VERSION="018_add_storage_stats_rpc"
 
 if [[ ! -f "$INIT_SCHEMA" ]]; then
   echo "Missing base schema: $INIT_SCHEMA" >&2
@@ -45,6 +47,7 @@ emit_sql() {
   cat <<SQL
 \set ON_ERROR_STOP on
 \set baseline_version '$BASELINE_VERSION'
+\set storage_stats_migration_version '$STORAGE_STATS_MIGRATION_VERSION'
 
 SELECT to_regclass('readest_internal.schema_migrations') IS NOT NULL
   AS ledger_exists
@@ -64,6 +67,23 @@ SELECT EXISTS (
 \if :baseline_applied
 \echo 'Readest self-hosted baseline is already applied; no changes made.'
 \quit 0
+\endif
+
+\if :ledger_exists
+SELECT EXISTS (
+  SELECT 1
+  FROM readest_internal.schema_migrations
+  WHERE version = '$PREVIOUS_BASELINE_VERSION'
+) AS previous_baseline_applied
+\gset
+\else
+\set previous_baseline_applied false
+\endif
+
+\if :previous_baseline_applied
+\echo 'The previous Readest self-hosted baseline is installed.'
+\echo 'Run self-hosted/upgrade.sh before retrying the baseline.'
+\quit 5
 \endif
 
 SELECT
@@ -174,6 +194,10 @@ GRANT EXECUTE ON FUNCTION
   public.fail_inbox_item(uuid, text, text)
 TO service_role;
 
+GRANT EXECUTE ON FUNCTION
+  public.get_storage_by_book_hash(uuid)
+TO service_role;
+
 -- Fail inside the transaction if the assembled baseline is incomplete.
 DO $$
 DECLARE
@@ -256,6 +280,31 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Readest files table is missing replica grouping columns';
   END IF;
+
+  IF to_regprocedure('public.get_storage_by_book_hash(uuid)') IS NULL THEN
+    RAISE EXCEPTION 'Readest baseline is missing the storage statistics RPC';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    CROSS JOIN LATERAL aclexplode(
+      COALESCE(p.proacl, acldefault('f', p.proowner))
+    ) acl
+    WHERE p.oid = 'public.get_storage_by_book_hash(uuid)'::regprocedure
+      AND acl.grantee = 0
+      AND acl.privilege_type = 'EXECUTE'
+  ) THEN
+    RAISE EXCEPTION 'Readest storage statistics RPC is executable by PUBLIC';
+  END IF;
+
+  IF NOT has_function_privilege(
+    'service_role',
+    'public.get_storage_by_book_hash(uuid)',
+    'EXECUTE'
+  ) THEN
+    RAISE EXCEPTION 'Readest storage statistics RPC is not executable by service_role';
+  END IF;
 END;
 $$;
 
@@ -271,7 +320,13 @@ CREATE TABLE IF NOT EXISTS readest_internal.schema_migrations (
 INSERT INTO readest_internal.schema_migrations (version, description)
 VALUES (
   :'baseline_version',
-  'Readest self-hosted Supabase baseline through migration 017'
+  'Readest self-hosted Supabase baseline through migration 018'
+);
+
+INSERT INTO readest_internal.schema_migrations (version, description)
+VALUES (
+  :'storage_stats_migration_version',
+  'Add service-role storage statistics aggregation RPC'
 );
 
 NOTIFY pgrst, 'reload schema';
