@@ -32,8 +32,11 @@ SELECT to_regclass('readest_internal.schema_migrations') IS NOT NULL
 
 \if :ledger_exists
 \else
-\echo 'Readest migration ledger is missing; run self-hosted/bootstrap.sh for a fresh database.'
-\quit 4
+DO \$psql\$
+BEGIN
+  RAISE EXCEPTION 'Readest migration ledger is missing; run self-hosted/bootstrap.sh for a fresh database.';
+END
+\$psql\$;
 \endif
 
 SELECT EXISTS (
@@ -48,8 +51,11 @@ SELECT EXISTS (
 
 \if :supported_baseline
 \else
-\echo 'No supported Readest self-hosted baseline record was found.'
-\quit 3
+DO \$psql\$
+BEGIN
+  RAISE EXCEPTION 'No supported Readest self-hosted baseline record was found.';
+END
+\$psql\$;
 \endif
 
 SELECT EXISTS (
@@ -61,7 +67,7 @@ SELECT EXISTS (
 
 \if :migration_applied
 \echo 'Readest self-hosted migrations are already current; no changes made.'
-\quit 0
+\quit
 \endif
 
 BEGIN;

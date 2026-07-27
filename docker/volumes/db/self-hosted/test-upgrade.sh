@@ -27,6 +27,14 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local pattern="$1"
+  if grep -Fq -- "$pattern" "$CAPTURE"; then
+    echo "Expected generated upgrade SQL not to contain: $pattern" >&2
+    exit 1
+  fi
+}
+
 assert_contains '\set ON_ERROR_STOP on'
 assert_contains '20260727_self_hosted_baseline_017'
 assert_contains '20260727_self_hosted_baseline_018'
@@ -38,6 +46,11 @@ assert_contains 'GRANT SELECT ON public.files TO service_role'
 assert_contains 'GRANT EXECUTE ON FUNCTION public.get_storage_by_book_hash(uuid) TO service_role'
 assert_contains "NOTIFY pgrst, 'reload schema'"
 assert_contains 'Readest self-hosted migrations are already current; no changes made.'
+assert_contains "RAISE EXCEPTION 'Readest migration ledger is missing"
+assert_contains "RAISE EXCEPTION 'No supported Readest self-hosted baseline record was found"
+assert_not_contains '\quit 0'
+assert_not_contains '\quit 3'
+assert_not_contains '\quit 4'
 
 assert_verify_contains() {
   local pattern="$1"

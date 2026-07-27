@@ -66,7 +66,7 @@ SELECT EXISTS (
 
 \if :baseline_applied
 \echo 'Readest self-hosted baseline is already applied; no changes made.'
-\quit 0
+\quit
 \endif
 
 \if :ledger_exists
@@ -81,9 +81,11 @@ SELECT EXISTS (
 \endif
 
 \if :previous_baseline_applied
-\echo 'The previous Readest self-hosted baseline is installed.'
-\echo 'Run self-hosted/upgrade.sh before retrying the baseline.'
-\quit 5
+DO \$psql\$
+BEGIN
+  RAISE EXCEPTION 'The previous Readest self-hosted baseline is installed; run self-hosted/upgrade.sh before retrying the baseline.';
+END
+\$psql\$;
 \endif
 
 SELECT
@@ -95,8 +97,11 @@ SELECT
 
 \if :supabase_ready
 \else
-\echo 'This database is missing the Supabase Auth schema or helper functions.'
-\quit 4
+DO \$psql\$
+BEGIN
+  RAISE EXCEPTION 'This database is missing the Supabase Auth schema or helper functions.';
+END
+\$psql\$;
 \endif
 
 SELECT NOT EXISTS (
@@ -124,9 +129,11 @@ SELECT NOT EXISTS (
 
 \if :target_is_clean
 \else
-\echo 'Readest tables already exist without the expected baseline record.'
-\echo 'Refusing to guess whether this is a partial or older installation.'
-\quit 3
+DO \$psql\$
+BEGIN
+  RAISE EXCEPTION 'Readest tables already exist without the expected baseline record; refusing to guess whether this is a partial or older installation.';
+END
+\$psql\$;
 \endif
 
 BEGIN;

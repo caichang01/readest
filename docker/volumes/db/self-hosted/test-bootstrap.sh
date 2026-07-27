@@ -53,7 +53,8 @@ assert_contains 'GRANT EXECUTE ON FUNCTION public.get_storage_by_book_hash(uuid)
 assert_contains '018_add_storage_stats_rpc'
 assert_contains "NOTIFY pgrst, 'reload schema'"
 assert_contains 'Readest self-hosted baseline is already applied; no changes made.'
-assert_contains 'Run self-hosted/upgrade.sh before retrying the baseline.'
+assert_contains 'run self-hosted/upgrade.sh before retrying the baseline.'
+assert_contains "RAISE EXCEPTION 'The previous Readest self-hosted baseline is installed"
 
 assert_not_contains 'Migration 001:'
 assert_not_contains 'Migration 013:'
@@ -63,6 +64,10 @@ assert_not_contains 'Migration 017:'
 assert_not_contains "\\echo 'Applying 018_add_storage_stats_rpc.sql...'"
 assert_not_contains 'CREATE INDEX CONCURRENTLY'
 assert_not_contains 'CALL public.backfill_books_synced_at'
+assert_not_contains '\quit 0'
+assert_not_contains '\quit 3'
+assert_not_contains '\quit 4'
+assert_not_contains '\quit 5'
 
 if LC_ALL=C grep -q $'\033' "$CAPTURE"; then
   echo "Generated SQL contains an unexpected ESC control character" >&2

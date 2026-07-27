@@ -191,8 +191,14 @@
   提交。
 - `verify.sql` 执行通过，得到 1 个 Auth 用户、12 张 Readest 表、44 条 RLS policy；
   台账同时包含 017 基线与 `018_add_storage_stats_rpc`。
-- 尚待重复运行 `upgrade.sh` 验证安全跳过，并从 Readest Web/API 日志确认不再出现
-  `get_storage_by_book_hash` 的 `PGRST202` 回退警告。
+- 重复运行 `upgrade.sh` 命中迁移台账并安全跳过；PostgreSQL 18 的 `psql` 同时提示
+  `\quit: extra argument "0" ignored`。这不影响本次退出和数据库状态，但说明
+  `\quit 0/3/4/5` 的参数不可移植，错误分支也无法依赖该参数返回非零。
+- 脚本修正将成功跳过改为无参数 `\quit`，将前置条件错误改为
+  `RAISE EXCEPTION`；生成测试明确禁止带参数的 `\quit`。
+- Readest 账户/存储管理页面验证与容器日志验证通过，不再出现
+  `get_storage_by_book_hash`、`PGRST202` 或 fallback aggregation 警告。存储统计 RPC
+  修复的真实环境验收完成。
 
 2026-07-27 完成客户端与 Web/API 配置阶段：
 
@@ -226,12 +232,9 @@
 
 下一阶段：
 
-1. 再次运行 `self-hosted/upgrade.sh`，确认命中迁移台账并安全跳过。
-2. 重新访问账户存储管理页面，确认 Web/API 日志不再出现
-   `get_storage_by_book_hash` 的 `PGRST202` 回退。
-3. 使用真实后端地址构建新的 Android 与桌面候选安装包。
-4. 执行令牌刷新、登出、跨设备书籍元数据/进度/笔记与自定义 S3 真机同步测试。
-5. 完成上述测试前，不把本分支合并到 `master`。
+1. 使用真实后端地址构建新的 Android 与桌面候选安装包。
+2. 执行令牌刷新、登出、跨设备书籍元数据/进度/笔记与自定义 S3 真机同步测试。
+3. 完成上述测试前，不把本分支合并到 `master`。
 
 ### 3.4 fork 专用 GitHub Actions
 
