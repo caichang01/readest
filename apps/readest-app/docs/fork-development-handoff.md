@@ -314,6 +314,14 @@
 - 全量 Vitest：541 个测试文件中 540 个通过；7259 条通过、3 条跳过、3 条失败。失败仍
   全部是 `turso-node.test.ts` 的既有向量距离浮点精度断言（期望 5、实际约
   4.997041），与本次设置同步修复无关。
+- 分支推送触发的 `Fork Web and API Image`（Actions run `30327656397`）成功完成，
+  并发布仅以本次提交 SHA 标识的候选镜像。
+- 手动运行 `Fork Release Installers`（Actions run `30327709979`，
+  `publish_release=false`）：Android、macOS Universal、Windows x64/ARM64、Linux
+  x64/ARM64 全部成功；Release 作业按预期跳过。
+- Android 使用仓库稳定签名密钥，universal 与 ARM64 APK 的构建、签名校验、
+  zipalign 校验和 artifact 上传全部成功。六组 artifact 对应提交
+  `e29ea9912e9c62317fe0664f75620809f2effad5`，保留至 2026-08-27。
 
 合并前真机验收重点：
 
