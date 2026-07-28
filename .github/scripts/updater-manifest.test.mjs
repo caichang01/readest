@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import { buildUpdaterManifest } from './updater-manifest.mjs';
+import { buildUpdaterManifest, collectSignedUpdaterAssets } from './updater-manifest.mjs';
 
 const assets = [
   { name: 'Readest_1.2.3_deadbeef_universal.apk', signature: 'android-universal-signature' },
@@ -84,4 +87,35 @@ test('rejects unsafe repository, version, tag, and timestamp values', () => {
   assert.throws(() => buildUpdaterManifest({ ...base, version: 'latest' }), /version/);
   assert.throws(() => buildUpdaterManifest({ ...base, tag: 'release/latest' }), /tag/);
   assert.throws(() => buildUpdaterManifest({ ...base, pubDate: 'today' }), /pubDate/);
+});
+
+test('collects updater binaries and their adjacent signatures from a release directory', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'readest-updater-manifest-'));
+  try {
+    writeFileSync(join(directory, 'Readest_1.2.3_deadbeef_universal.apk'), 'apk');
+    writeFileSync(
+      join(directory, 'Readest_1.2.3_deadbeef_universal.apk.sig'),
+      '  signed-apk  \n',
+    );
+    writeFileSync(join(directory, 'Readest_1.2.3_amd64.deb'), 'deb');
+
+    assert.deepEqual(collectSignedUpdaterAssets(directory), [
+      {
+        name: 'Readest_1.2.3_deadbeef_universal.apk',
+        signature: 'signed-apk',
+      },
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('rejects a recognized updater binary whose adjacent signature is missing', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'readest-updater-manifest-'));
+  try {
+    writeFileSync(join(directory, 'Readest_1.2.3_arm64-setup.exe'), 'exe');
+    assert.throws(() => collectSignedUpdaterAssets(directory), /arm64-setup\.exe.*signature/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

@@ -1,3 +1,7 @@
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 const SEMVER_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
@@ -14,6 +18,10 @@ const PLATFORM_RULES = [
 ];
 
 const REQUIRED_PLATFORM_KEYS = PLATFORM_RULES.flatMap((rule) => rule.keys);
+
+function findPlatformRule(name) {
+  return PLATFORM_RULES.find(({ pattern }) => pattern.test(name));
+}
 
 function requireReleaseMetadata({ version, tag, repository, pubDate }) {
   if (typeof version !== 'string' || !SEMVER_PATTERN.test(version)) {
@@ -53,7 +61,7 @@ export function buildUpdaterManifest({
 
   const platforms = {};
   for (const asset of assets) {
-    const rule = PLATFORM_RULES.find(({ pattern }) => pattern.test(asset?.name ?? ''));
+    const rule = findPlatformRule(asset?.name ?? '');
     if (!rule) continue;
     const signature = typeof asset.signature === 'string' ? asset.signature.trim() : '';
     if (!signature) {
@@ -80,4 +88,40 @@ export function buildUpdaterManifest({
     notes,
     platforms,
   };
+}
+
+export function collectSignedUpdaterAssets(directory) {
+  return readdirSync(directory)
+    .sort()
+    .flatMap((name) => {
+      if (!findPlatformRule(name)) return [];
+      const signaturePath = join(directory, `${name}.sig`);
+      if (!existsSync(signaturePath)) {
+        throw new Error(`${name} is missing its adjacent updater signature`);
+      }
+      const signature = readFileSync(signaturePath, 'utf8').trim();
+      if (!signature) {
+        throw new Error(`${name} has an empty updater signature`);
+      }
+      return [{ name, signature }];
+    });
+}
+
+function run() {
+  const directory = process.argv[2] ?? 'release-files';
+  const outputPath = process.argv[3] ?? join(directory, 'latest.json');
+  const manifest = buildUpdaterManifest({
+    version: process.env.RELEASE_VERSION,
+    tag: process.env.RELEASE_TAG,
+    repository: process.env.GITHUB_REPOSITORY,
+    pubDate: process.env.RELEASE_PUB_DATE ?? new Date().toISOString(),
+    notes: process.env.RELEASE_NOTES ?? '',
+    assets: collectSignedUpdaterAssets(directory),
+  });
+  writeFileSync(outputPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o644 });
+  console.log(`Generated signed updater manifest at ${outputPath}`);
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  run();
 }

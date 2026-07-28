@@ -106,6 +106,8 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           NEXT_PUBLIC_API_BASE_URL: ${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+          NEXT_PUBLIC_UPDATER_BASE_URL: ${{ vars.NEXT_PUBLIC_UPDATER_BASE_URL }}
+          NEXT_PUBLIC_UPDATER_PUBKEY: ${{ vars.NEXT_PUBLIC_UPDATER_PUBKEY }}
         run: node .github/scripts/prepare-fork-env.mjs "$APP_DIR/.env.tauri" "$APP_DIR/.env.local"
 
       - name: Generate Android project
@@ -171,13 +173,21 @@ jobs:
             "$out/Readest_${version}_${short_sha}_arm64.apk"
 
       - name: Verify Android APKs
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           for apk in dist/android/*.apk; do
             "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
             "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -v 4 "$apk" >/dev/null
+            (
+              cd "$APP_DIR"
+              pnpm tauri signer sign "$GITHUB_WORKSPACE/$apk"
+            )
+            test -s "$apk.sig"
           done
-          sha256sum dist/android/*.apk > dist/android/SHA256SUMS
+          sha256sum dist/android/*.apk dist/android/*.apk.sig > dist/android/SHA256SUMS
 
       - name: Upload Android installers
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -299,18 +309,26 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           NEXT_PUBLIC_API_BASE_URL: ${{ vars.NEXT_PUBLIC_API_BASE_URL }}
-        run: node .github/scripts/prepare-fork-env.mjs "$APP_DIR/.env.tauri" "$APP_DIR/.env.local"
+          NEXT_PUBLIC_UPDATER_BASE_URL: ${{ vars.NEXT_PUBLIC_UPDATER_BASE_URL }}
+          NEXT_PUBLIC_UPDATER_PUBKEY: ${{ vars.NEXT_PUBLIC_UPDATER_PUBKEY }}
+        run: >-
+          node .github/scripts/prepare-fork-env.mjs
+          "$APP_DIR/.env.tauri"
+          "$APP_DIR/.env.local"
+          "$APP_DIR/src-tauri/fork-ci-tauri-config.generated.json"
 
       - name: Build release installer
         env:
           TAURI_BUNDLER_NEW_APPIMAGE_FORMAT: "true"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           cd "$APP_DIR"
           if [ "${{ matrix.platform }}" = "linux" ]; then
-            cargo tauri build --config src-tauri/fork-ci-tauri-config.json
+            cargo tauri build --config src-tauri/fork-ci-tauri-config.generated.json
           else
-            pnpm tauri build --config src-tauri/fork-ci-tauri-config.json ${{ matrix.tauri_args }}
+            pnpm tauri build --config src-tauri/fork-ci-tauri-config.generated.json ${{ matrix.tauri_args }}
           fi
 
       - name: Collect release installer
@@ -321,17 +339,31 @@ jobs:
 
           case "${{ matrix.platform }}" in
             windows)
-              find target -type f -path '*/bundle/nsis/*-setup.exe' -exec cp {} "$out/" \;
+              find target -type f \
+                \( -path '*/bundle/nsis/*-setup.exe' -o -path '*/bundle/nsis/*-setup.exe.sig' \) \
+                -exec cp {} "$out/" \;
               ;;
             macos)
               find target -type f -path '*/bundle/dmg/*.dmg' -exec cp {} "$out/" \;
+              find target -type f \
+                \( -path '*/bundle/macos/*.app.tar.gz' -o -path '*/bundle/macos/*.app.tar.gz.sig' \) \
+                -exec cp {} "$out/" \;
               ;;
             linux)
-              find target -type f \( -path '*/bundle/appimage/*.AppImage' -o -path '*/bundle/deb/*.deb' \) -exec cp {} "$out/" \;
+              find target -type f \
+                \( -path '*/bundle/appimage/*.AppImage' \
+                -o -path '*/bundle/appimage/*.AppImage.sig' \
+                -o -path '*/bundle/deb/*.deb' \) \
+                -exec cp {} "$out/" \;
               ;;
           esac
 
           test -n "$(find "$out" -type f -print -quit)"
+          if [ "${{ matrix.platform }}" != "macos" ]; then
+            test -n "$(find "$out" -type f -name '*.sig' -print -quit)"
+          else
+            test "$(find "$out" -type f -name '*.app.tar.gz.sig' | wc -l | tr -d ' ')" -eq 1
+          fi
 
       - name: Upload release installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -380,7 +412,21 @@ jobs:
           test "$(find release-files -maxdepth 1 -type f -name '*.AppImage' | wc -l | tr -d ' ')" -eq 2
           test "$(find release-files -maxdepth 1 -type f -name '*.deb' | wc -l | tr -d ' ')" -eq 2
           test "$(find release-files -maxdepth 1 -type f -name '*.dmg' | wc -l | tr -d ' ')" -eq 1
+          test "$(find release-files -maxdepth 1 -type f -name '*.app.tar.gz' | wc -l | tr -d ' ')" -eq 1
+          test "$(find release-files -maxdepth 1 -type f -name '*.sig' | wc -l | tr -d ' ')" -eq 7
 
+          cp apps/readest-app/release-notes.json release-files/release-notes.json
+
+      - name: Generate signed updater manifest
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_NOTES: Readest fork v${{ needs.metadata.outputs.version }}
+        run: node .github/scripts/updater-manifest.mjs release-files release-files/latest.json
+
+      - name: Generate and verify checksums
+        run: |
+          set -euo pipefail
           cd release-files
           sha256sum * > SHA256SUMS
           sha256sum --check SHA256SUMS

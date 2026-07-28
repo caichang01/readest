@@ -19,8 +19,12 @@ import { tauriDownload } from '@/utils/transfer';
 import { installPackage, verifyUpdateSignature, installNightlyUpdate } from '@/utils/bridge';
 import { join } from '@tauri-apps/api/path';
 import { getLocale } from '@/utils/misc';
-import { setLastShownReleaseNotesVersion } from '@/helpers/updater';
-import type { ResolvedNightlyUpdate } from '@/helpers/updater';
+import {
+  assertDownloadedUpdateSignature,
+  getSignedManifestEntry,
+  setLastShownReleaseNotesVersion,
+} from '@/helpers/updater';
+import type { ResolvedNightlyUpdate, UpdateManifest } from '@/helpers/updater';
 import {
   READEST_UPDATER_FILE,
   READEST_CHANGELOG_FILE,
@@ -128,12 +132,13 @@ export const UpdaterContent = ({
       if (!appService) return;
       const fetch = isTauriAppPlatform() ? tauriFetch : window.fetch;
       const response = await fetch(READEST_UPDATER_FILE);
-      const data = await response.json();
+      const data = (await response.json()) as UpdateManifest;
       if (semver.gt(data.version, currentVersion)) {
         const OS_ARCH = osArch();
         const platformKey = OS_ARCH === 'aarch64' ? 'android-arm64' : 'android-universal';
+        const entry = getSignedManifestEntry(data, platformKey);
+        if (!entry) return;
         const arch = OS_ARCH === 'aarch64' ? 'arm64' : 'universal';
-        const downloadUrl = data.platforms[platformKey]?.url as string;
         const apkFilePath = await appService.resolveFilePath(
           `Readest_${data.version}_${arch}.apk`,
           'Cache',
@@ -144,36 +149,13 @@ export const UpdaterContent = ({
           date: data.pub_date,
           body: data.notes,
           downloadAndInstall: async (onEvent) => {
-            await new Promise<void>(async (resolve, reject) => {
-              let downloaded = 0;
-              let total = 0;
-              await tauriDownload(downloadUrl, apkFilePath, (progress) => {
-                if (!onEvent) return;
-                if (!total && progress.total) {
-                  total = progress.total;
-                  onEvent({
-                    event: 'Started',
-                    data: { contentLength: total },
-                  });
-                } else if (downloaded > 0 && progress.progress === progress.total) {
-                  console.log('APK downloaded to', apkFilePath);
-                  onEvent?.({ event: 'Finished' });
-                  setTimeout(() => {
-                    resolve();
-                  }, 1000);
-                }
-
-                onEvent({
-                  event: 'Progress',
-                  data: { chunkLength: progress.progress - downloaded },
-                });
-                downloaded = progress.progress;
-              }).catch((error) => {
-                console.error('Download failed:', error);
-                reject(error);
-              });
-            });
-
+            await downloadWithProgress(entry.url, apkFilePath, onEvent);
+            await assertDownloadedUpdateSignature(
+              apkFilePath,
+              entry,
+              READEST_UPDATER_PUBKEY,
+              verifyUpdateSignature,
+            );
             const res = await installPackage({
               path: apkFilePath,
             });
@@ -218,13 +200,14 @@ export const UpdaterContent = ({
       if (!appService) return;
       const fetch = isTauriAppPlatform() ? tauriFetch : window.fetch;
       const response = await fetch(READEST_UPDATER_FILE);
-      const data = await response.json();
+      const data = (await response.json()) as UpdateManifest;
       if (semver.gt(data.version, currentVersion)) {
         const OS_ARCH = osArch();
         const platformKey =
           OS_ARCH === 'x86_64' ? 'windows-x86_64-portable' : 'windows-aarch64-portable';
+        const entry = getSignedManifestEntry(data, platformKey);
+        if (!entry) return;
         const arch = OS_ARCH === 'x86_64' ? 'x64' : 'arm64';
-        const downloadUrl = data.platforms[platformKey]?.url as string;
         const execDir = await invoke<string>('get_executable_dir');
         const exeFileName = `Readest_${data.version}_${arch}-portable.exe`;
         const exeFilePath = await join(execDir, exeFileName);
@@ -234,7 +217,13 @@ export const UpdaterContent = ({
           date: data.pub_date,
           body: data.notes,
           downloadAndInstall: async (onEvent) => {
-            await downloadWithProgress(downloadUrl, exeFilePath, onEvent);
+            await downloadWithProgress(entry.url, exeFilePath, onEvent);
+            await assertDownloadedUpdateSignature(
+              exeFilePath,
+              entry,
+              READEST_UPDATER_PUBKEY,
+              verifyUpdateSignature,
+            );
             try {
               console.log('Launching new executable:', exeFilePath);
               const command = Command.create('start-readest', ['/C', 'start', '', exeFilePath]);
@@ -254,13 +243,14 @@ export const UpdaterContent = ({
       if (!appService) return;
       const fetch = isTauriAppPlatform() ? tauriFetch : window.fetch;
       const response = await fetch(READEST_UPDATER_FILE);
-      const data = await response.json();
+      const data = (await response.json()) as UpdateManifest;
       if (semver.gt(data.version, currentVersion)) {
         const OS_ARCH = osArch();
         const platformKey =
           OS_ARCH === 'x86_64' ? 'linux-x86_64-appimage' : 'linux-aarch64-appimage';
+        const entry = getSignedManifestEntry(data, platformKey);
+        if (!entry) return;
         const arch = OS_ARCH === 'x86_64' ? 'x86_64' : 'aarch64';
-        const downloadUrl = data.platforms[platformKey]?.url as string;
         const appImageFileName = `Readest_${data.version}_${arch}.AppImage`;
         const appImageFilePath = await join(await desktopDir(), appImageFileName);
         setUpdate({
@@ -269,7 +259,13 @@ export const UpdaterContent = ({
           date: data.pub_date,
           body: data.notes,
           downloadAndInstall: async (onEvent) => {
-            await downloadWithProgress(downloadUrl, appImageFilePath, onEvent);
+            await downloadWithProgress(entry.url, appImageFilePath, onEvent);
+            await assertDownloadedUpdateSignature(
+              appImageFilePath,
+              entry,
+              READEST_UPDATER_PUBKEY,
+              verifyUpdateSignature,
+            );
             try {
               // Make the AppImage executable
               const chmodCommand = Command.create('chmod-appimage', ['+x', appImageFilePath]);
