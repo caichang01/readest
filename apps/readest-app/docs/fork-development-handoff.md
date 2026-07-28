@@ -10,6 +10,7 @@
 
 - `master` 已合并生产化诊断功能和经过真机验收的 S3 书籍恢复修复。
 - 自建 Supabase 登录与数据库接入正在分支 `codex/self-hosted-supabase-auth` 开发；Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署和登录验收已经完成。长期 Android 签名与跨平台候选构建也已验证；安装后的原生端登录、会话恢复和跨设备同步验收完成前，尚不得合并到 `master`。
+- Android 与 macOS 候选包的登录、重启恢复、登出，以及跨设备书籍和进度同步已经通过真机验证。S3 设置副本缺失字段的正式修复正在 `codex/fix-settings-replica-backfill` 分支开发，核心提交为 `7d1a1675 fix: backfill missing replica settings`；完成新候选包真机验证前不得合并。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -260,9 +261,69 @@
 
 下一阶段：
 
-1. 安装 Android 与 macOS 候选包，验证登录、应用重启后的会话恢复、登出和重新登录。
-2. 执行跨设备书籍元数据、进度、笔记、设置与自定义 S3 真机同步测试。
-3. 完成上述测试前，不把本分支合并到 `master`。
+1. Android 与 macOS 的登录、应用重启会话恢复、登出和重新登录已经通过。
+2. 跨设备书籍和进度同步已经通过；笔记与其余设置仍应继续补充真机覆盖。
+3. S3 endpoint、region、bucket 未进入服务器设置副本的问题已进入独立正式修复，见下一节。
+4. 完成正式修复候选包的跨设备真机验证前，不把相关分支合并到 `master`。
+
+### 3.3.2 设置副本缺失字段正式修复
+
+分支：`codex/fix-settings-replica-backfill`
+
+核心提交：`7d1a1675 fix: backfill missing replica settings`
+
+2026-07-28 的真实现象与证据：
+
+- macOS 已配置 Readest 登录和 S3 后，Android 登录同一账户时，S3 表单没有自动出现
+  endpoint、region 和 bucket，界面长时间显示同步进行中。
+- 数据库安全检查确认 `public.replicas` 的 settings 单例中存在已加密的
+  `s3.accessKeyId` 和 `s3.secretAccessKey`，但不存在 `s3.endpoint`、`s3.region` 和
+  `s3.bucket`。
+- Android 手工补上缺失的非敏感字段后，临时恢复方案验证成功，证明认证、加密密钥解密
+  和 S3 连接本身正常，故障位于设置副本字段不完整及表单未刷新。
+
+根因：
+
+- 应用启动时 `initSettingsSync(initialSettings)` 会用磁盘设置初始化已发布快照，防止新
+  设备以本地默认值覆盖服务器权威设置。
+- 如果 S3 是在登录前配置的，磁盘上已有 endpoint、region、bucket；登录后这些值因为
+  与已初始化快照相同，不会被普通变更发布器视为新变更。
+- 凭据同步使用独立哈希和加密流程，因此可能只把 Access Key、Secret Key 写入服务器，
+  形成“有密钥、无连接元数据”的部分 settings 行。
+- `S3Form` 原先只在组件挂载时把 Zustand 设置复制进 React state；副本拉取稍后到达时，
+  已打开的表单不会更新。
+
+正式修复行为：
+
+1. settings 启动全量拉取成功后，收集服务器实际存在的字段路径；只用本地有意义的值
+   补齐服务器缺失字段，绝不覆盖服务器已有字段。
+2. 增量拉取的空结果只表示游标之后没有变化，不能解释为服务器字段缺失，因此不会触发
+   回填。
+3. `dictionarySettings.providerOrder` 等要求显式用户操作的字段仍不自动发布。
+4. 加密字段继续遵守“凭据同步”开关和口令解锁流程；开关关闭时不会提示口令、不会上传
+   S3 密钥。服务器已经存在的加密字段也不会重传。
+5. 未激活且未被用户编辑的 S3 表单会在远端设置异步到达时刷新；如果用户已经开始输入，
+   远端更新不会覆盖正在编辑的草稿。
+
+验证结果：
+
+- 回归过程先确认新增测试因缺少回填函数而失败，再完成实现。
+- 设置发布、拉取编排和 S3 表单相关测试：3 个文件、60 条全部通过。
+- `pnpm lint`：通过，TypeScript 与 Biome lint 无错误。
+- `pnpm -w format:check`：通过。
+- 全量 Vitest：541 个测试文件中 540 个通过；7259 条通过、3 条跳过、3 条失败。失败仍
+  全部是 `turso-node.test.ts` 的既有向量距离浮点精度断言（期望 5、实际约
+  4.997041），与本次设置同步修复无关。
+
+合并前真机验收重点：
+
+1. 设备 A 使用旧的“不完整 settings 行”启动新候选包，确认一次全量拉取后服务器自动
+   补齐 endpoint、region、bucket。
+2. 清空设备 B 的本地应用数据或使用未配置过 S3 的设备，登录并解锁凭据同步，确认 S3
+   表单自动出现完整配置，随后手动连接成功。
+3. 在设备 B 表单内先输入未保存内容，再等待或触发设置拉取，确认用户草稿不会被覆盖。
+4. 确认书籍、进度和原有 S3 文件同步行为无回归后，方可合并到长期开发分支或
+   `master`。
 
 ### 3.4 fork 专用 GitHub Actions
 
@@ -496,6 +557,8 @@ pnpm --filter @readest/readest-app exec vitest run \
 | 通用同步设置 UI | `src/components/settings/integrations/FileSyncForm.tsx` |
 | S3 设置 UI | `src/components/settings/integrations/S3Form.tsx` |
 | S3 provider | `src/services/sync/providers/s3/S3Provider.ts` |
+| 设置副本发布与缺失字段回填 | `src/services/sync/replicaSettingsSync.ts` |
+| 设置副本启动/增量拉取编排 | `src/hooks/useReplicaPull.ts` |
 | 阅读器初始化 | `src/store/readerStore.ts` |
 | 原生流式传输 | `src-tauri/src/transfer_file.rs` |
 | 本地诊断日志 | `src/utils/diagnosticLog.ts` |
