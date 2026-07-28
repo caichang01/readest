@@ -9,8 +9,8 @@
 当前 Git 状态（截至最后更新）：
 
 - `master` 已合并生产化诊断功能和经过真机验收的 S3 书籍恢复修复。
-- 自建 Supabase 登录与数据库接入正在分支 `codex/self-hosted-supabase-auth` 开发；Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署和登录验收已经完成。长期 Android 签名与跨平台候选构建也已验证；安装后的原生端登录、会话恢复和跨设备同步验收完成前，尚不得合并到 `master`。
-- Android 与 macOS 候选包的登录、重启恢复、登出，以及跨设备书籍和进度同步已经通过真机验证。S3 设置副本缺失字段的正式修复正在 `codex/fix-settings-replica-backfill` 分支开发，核心提交为 `7d1a1675 fix: backfill missing replica settings`；完成新候选包真机验证前不得合并。
+- 自建 Supabase 登录与数据库接入位于 `codex/self-hosted-supabase-auth`；Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署和登录验收已经完成。长期 Android 签名、跨平台候选构建、原生端登录、会话恢复和跨设备同步也已通过验收，等待连同后续 S3 设置修复取得明确合并授权。
+- Android 与 macOS 候选包的登录、重启恢复、登出，以及跨设备书籍和进度同步已经通过真机验证。S3 设置副本缺失字段的正式修复位于 `codex/fix-settings-replica-backfill`，核心提交为 `7d1a1675 fix: backfill missing replica settings`；新候选包真机验收也已通过，等待明确授权后合并。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -332,6 +332,14 @@
 3. 在设备 B 表单内先输入未保存内容，再等待或触发设置拉取，确认用户草稿不会被覆盖。
 4. 确认书籍、进度和原有 S3 文件同步行为无回归后，方可合并到长期开发分支或
    `master`。
+
+2026-07-28 真机验收结论：
+
+- 用户确认本次正式修复候选版本测试验证通过。
+- 设置副本缺失字段回填与跨设备 S3 配置恢复符合预期，未报告书籍、进度或原有 S3
+  文件同步回归。
+- 本分支已经满足进入合并审核的测试条件；仍须取得明确授权后才能合并到 `master`，
+  不因验收通过自动发布 Release。
 
 ### 3.4 fork 专用 GitHub Actions
 
