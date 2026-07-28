@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { MdVisibility, MdVisibilityOff } from 'react-icons/md';
 import { useEnv } from '@/context/EnvContext';
 import { useTranslation, type TranslationFunc } from '@/hooks/useTranslation';
@@ -65,6 +65,26 @@ const S3Form: React.FC = () => {
   const [secretAccessKey, setSecretAccessKey] = useState(stored?.secretAccessKey || '');
   const [isConnecting, setIsConnecting] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
+  const isDraftDirty = useRef(false);
+
+  // Settings replicas arrive after the page has mounted. Keep an untouched
+  // inactive form in sync with those asynchronous values, while never
+  // replacing text the user has already started editing locally.
+  useEffect(() => {
+    if (isActive || isDraftDirty.current) return;
+    setEndpoint(stored?.endpoint || '');
+    setRegion(stored?.region || 'auto');
+    setBucket(stored?.bucket || '');
+    setAccessKeyId(stored?.accessKeyId || '');
+    setSecretAccessKey(stored?.secretAccessKey || '');
+  }, [
+    isActive,
+    stored?.accessKeyId,
+    stored?.bucket,
+    stored?.endpoint,
+    stored?.region,
+    stored?.secretAccessKey,
+  ]);
 
   const canSubmit = !!(endpoint && bucket && accessKeyId && secretAccessKey);
 
@@ -98,6 +118,7 @@ const S3Form: React.FC = () => {
       ...s,
       s3: { ...s.s3, ...draft },
     }));
+    isDraftDirty.current = false;
     setIsConnecting(false);
     eventDispatcher.dispatch('toast', { type: 'info', message: _('Connected') });
   };
@@ -209,7 +230,10 @@ const S3Form: React.FC = () => {
             className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
             spellCheck='false'
             value={endpoint}
-            onChange={(e) => setEndpoint(e.target.value)}
+            onChange={(e) => {
+              isDraftDirty.current = true;
+              setEndpoint(e.target.value);
+            }}
           />
         </div>
 
@@ -224,7 +248,10 @@ const S3Form: React.FC = () => {
             className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
             spellCheck='false'
             value={bucket}
-            onChange={(e) => setBucket(e.target.value)}
+            onChange={(e) => {
+              isDraftDirty.current = true;
+              setBucket(e.target.value);
+            }}
           />
         </div>
 
@@ -239,7 +266,10 @@ const S3Form: React.FC = () => {
             className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
             spellCheck='false'
             value={region}
-            onChange={(e) => setRegion(e.target.value)}
+            onChange={(e) => {
+              isDraftDirty.current = true;
+              setRegion(e.target.value);
+            }}
           />
         </div>
 
@@ -254,7 +284,10 @@ const S3Form: React.FC = () => {
             className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
             spellCheck='false'
             value={accessKeyId}
-            onChange={(e) => setAccessKeyId(e.target.value)}
+            onChange={(e) => {
+              isDraftDirty.current = true;
+              setAccessKeyId(e.target.value);
+            }}
             autoComplete='off'
           />
         </div>
@@ -270,7 +303,10 @@ const S3Form: React.FC = () => {
               placeholder={_('Your Secret Access Key')}
               className='input input-bordered eink-bordered h-11 w-full pe-11 text-sm focus:outline-none'
               value={secretAccessKey}
-              onChange={(e) => setSecretAccessKey(e.target.value)}
+              onChange={(e) => {
+                isDraftDirty.current = true;
+                setSecretAccessKey(e.target.value);
+              }}
               autoComplete='off'
             />
             <button

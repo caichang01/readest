@@ -1,6 +1,6 @@
 # Readest fork 二次开发交接记录
 
-最后更新：2026-07-23
+最后更新：2026-07-28
 
 这份文档记录本 fork 相对上游 Readest 的产品目标、已经完成的改造、验证结果、已知问题和后续计划。开始新的 fork 专属开发前，应先阅读本文；完成一个阶段后，应同步更新日期、提交、测试结果和未完成事项。
 
@@ -9,6 +9,8 @@
 当前 Git 状态（截至最后更新）：
 
 - `master` 已合并生产化诊断功能和经过真机验收的 S3 书籍恢复修复。
+- 自建 Supabase 登录与数据库接入位于 `codex/self-hosted-supabase-auth`；Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署和登录验收已经完成。长期 Android 签名、跨平台候选构建、原生端登录、会话恢复和跨设备同步也已通过验收，等待连同后续 S3 设置修复取得明确合并授权。
+- Android 与 macOS 候选包的登录、重启恢复、登出，以及跨设备书籍和进度同步已经通过真机验证。S3 设置副本缺失字段的正式修复位于 `codex/fix-settings-replica-backfill`，核心提交为 `7d1a1675 fix: backfill missing replica settings`；新候选包真机验收也已通过，等待明确授权后合并。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -114,6 +116,230 @@
 - 设置副本、阅读统计、字典、字体、纹理和部分账户数据仍可通过 Readest Cloud/副本同步处理。
 - 选择第三方 provider 后，Readest Cloud 不再上传书籍文件；第三方 provider 成为书籍文件的主要存储位置。
 - 因此，纯本地加自定义 S3 可以不登录；需要跨设备账户数据同步时，登录仍有意义。
+
+### 3.3.1 自建 Supabase 接入进度
+
+开发分支：`codex/self-hosted-supabase-auth`
+
+2026-07-27 已完成服务器端第一阶段：
+
+- 目标环境为 Pigsty 管理的 PostgreSQL 18.4 和自托管 Supabase；不启动项目 `docker/compose.yaml` 中的第二套 PostgreSQL/Auth/Kong。
+- 自托管 Auth 的 `JWT_SECRET`、`ANON_KEY`、`SERVICE_ROLE_KEY` 已统一轮换并验证 Admin API。
+- 首个用户已创建并确认，随后通过 Pigsty 源配置设置 `DISABLE_SIGNUP=true`；未来仍可由管理员创建用户或临时重新开放注册。
+- 登录系统公开域名、HTTPS、Kong、GoTrue 和 PostgREST 已完成健康验证。仓库不得记录实际域名、IP、邮箱或密钥。
+- 用户选择保留完整 Supabase 服务栈并不配置 Swap；这是部署决策，不应通过代码擅自停用服务。
+- PostgreSQL 已通过 Pigsty 配置 pgBackRest、S3 备份仓库和 PITR。此环境今后执行
+  Readest 数据库迁移前，标准备份命令统一为 `sudo -iu postgres pig pb backup`；
+  命令成功后再迁移，不默认追加临时 `pg_dump`。
+
+数据库部署新增 `docker/volumes/db/self-hosted/`：
+
+- `bootstrap.sh` 将当前基础 schema 与空库所需历史迁移组装后，通过标准输入交给管理员 `psql`。
+- 基线在单个事务中执行；失败自动回滚。
+- `readest_internal.schema_migrations` 记录基线版本，重复执行成功退出且不修改数据库。
+- 已存在 Readest 表但没有预期版本记录时，脚本拒绝猜测和覆盖。
+- `verify.sql` 验证 12 张业务表、RLS、同步列、replica allowlist 和迁移记录。
+- `test-bootstrap.sh` 验证迁移选择，排除已折叠迁移和不能放进事务的在线迁移 016，并阻止生成 SQL 出现 ESC 控制字符。
+
+真实环境验收结果：
+
+- 第一次执行发现迁移提示行的 `\echo` 被 Bash `printf` 解释为 ESC 控制字符；`ON_ERROR_STOP` 触发后整个事务正确回滚，没有残留业务表。
+- 修复生成方式并增加回归断言后，首次基线应用成功。
+- 独立验收得到 1 个已确认 Auth 用户、12 张 Readest 表和 44 条 RLS policy。
+- 第二次执行命中版本记录并安全跳过。
+- 仓库级测试入口为 `pnpm test:self-hosted-db`。
+
+2026-07-27 的 Web/API 候选部署与登录验收：
+
+- 开发分支推送会构建仅含不可变 `sha-*` 标签的 Linux x64 GHCR 候选镜像，不会覆盖
+  `master` 或 `latest`。
+- 候选镜像已确认可匿名拉取，并部署到 QNAP Container Station；QNAP 反向代理为
+  Readest 提供 HTTPS，Supabase 保持运行在同一 NAS 内的独立 Rocky Linux 虚拟机。
+- `/runtime-config.js`、Readest Web 和已执行的登录流程均验证成功。仓库只记录部署
+  拓扑和结果，不记录实际域名、IP、邮箱、anon key 或 `service_role` key。
+- 运行日志发现 API 调用 `public.get_storage_by_book_hash(p_user_id)` 时收到
+  `PGRST202`。上游 API 带有分页回退，所以登录和同步未失败；调查确认根因是上游代码
+  引入 RPC 调用时没有同步提交数据库函数。
+
+存储统计 RPC 正式修复：
+
+- 新增 `018_add_storage_stats_rpc.sql`，在 PostgreSQL 内按 `book_hash` 聚合未软删除
+  文件的数量和总大小，并保持 API 所需的 camelCase 返回字段。
+- RPC 使用 `SECURITY INVOKER`，撤销 `PUBLIC` 执行权限，只允许 Readest 服务端使用的
+  `service_role` 调用，并显式保证该角色拥有 `files` 的最小读取权限。
+- 当前 `schema.sql` 和新装自建基线更新到 018；现有 017 基线不得重跑 bootstrap，
+  而是使用新增的 `self-hosted/upgrade.sh` 前向迁移。
+- `upgrade.sh` 在独立事务中执行迁移、记录台账并通知 PostgREST 刷新 schema cache；
+  重复执行安全跳过。
+- `verify.sql` 新增函数签名、018 迁移记录、`PUBLIC` 禁权和 `service_role` 授权检查。
+- `pnpm test:self-hosted-db` 同时覆盖新装基线与 017 → 018 升级 SQL 生成。
+
+本修复的本地验证：
+
+- `pnpm test:self-hosted-db`：新装基线与升级生成测试均通过。
+- `bash -n`、`git diff --check`、`pnpm format:check` 和 `pnpm lint`：通过。
+- Node 24.14.0 全量 `pnpm test`：539 个测试文件通过，7253 条测试通过；仍只有
+  `turso-node.test.ts` 中 3 条既有向量距离浮点精度断言失败，与本数据库迁移无关。
+- 本机没有 PostgreSQL、`psql` 或 Docker，因此实际 SQL 执行、PostgREST schema cache
+  刷新和 RPC 返回值集成验证留给已备份的 Pigsty 测试步骤；完成前不宣称真实迁移通过。
+
+2026-07-27 Pigsty 真实迁移验证：
+
+- `sudo -iu postgres pig pb backup` 成功完成 pgBackRest S3 增量备份，备份结束与保留
+  清理均正常；仓库不记录实际 bucket、endpoint 或密钥。
+- 017 → 018 升级在单个事务中成功执行：创建 RPC、撤销 `PUBLIC` 权限、授予
+  `service_role` 表读取与函数执行权限、写入迁移台账、发送 PostgREST reload 通知后
+  提交。
+- `verify.sql` 执行通过，得到 1 个 Auth 用户、12 张 Readest 表、44 条 RLS policy；
+  台账同时包含 017 基线与 `018_add_storage_stats_rpc`。
+- 重复运行 `upgrade.sh` 命中迁移台账并安全跳过；PostgreSQL 18 的 `psql` 同时提示
+  `\quit: extra argument "0" ignored`。这不影响本次退出和数据库状态，但说明
+  `\quit 0/3/4/5` 的参数不可移植，错误分支也无法依赖该参数返回非零。
+- 脚本修正将成功跳过改为无参数 `\quit`，将前置条件错误改为
+  `RAISE EXCEPTION`；生成测试明确禁止带参数的 `\quit`。
+- Readest 账户/存储管理页面验证与容器日志验证通过，不再出现
+  `get_storage_by_book_hash`、`PGRST202` 或 fallback aggregation 警告。存储统计 RPC
+  修复的真实环境验收完成。
+
+2026-07-27 完成客户端与 Web/API 配置阶段：
+
+- `.github/scripts/prepare-fork-env.mjs` 从 GitHub Variables/Secret 生成原生构建专用 `.env.local`。
+- Android 和桌面 fork Release 构建现在必须提供 `NEXT_PUBLIC_SUPABASE_URL`、
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY`、`NEXT_PUBLIC_API_BASE_URL`；缺失、占位符、非 HTTPS
+  或多行值会中止，不能继续回退到上游后端。
+- `.github/workflows/fork-web-image.yml` 只构建 Linux x64 的 fork Web/API 镜像并发布
+  到当前仓库所有者的 GHCR；`codex/**` 开发分支只发布不可变 `sha-*` 候选标签，
+  `master` 才更新 `master` 和 `latest`，没有恢复上游 Docker Hub、多架构或正式部署
+  流程。
+- `docker/compose.external-supabase.yaml` 只启动 Readest Web/API，不管理 Pigsty 或现有
+  Supabase 容器。`docker/.env.external-supabase.example` 将客户端 anon key 与仅服务端
+  `service_role` key 明确分离。
+- `docker/EXTERNAL_SUPABASE.md` 记录镜像部署、反向代理、回调 allowlist、GitHub 配置和
+  最小验收顺序，不包含真实域名、IP、邮箱或密钥。
+- GoTrue 回调最少需要 Readest Web 的 `/auth/callback` 精确 HTTPS URL 与
+  `readest://auth-callback`；现有 Tauri 配置已注册 `readest` scheme，无需改 Rust。
+
+本阶段验证：
+
+- `node --test .github/scripts/*.test.mjs`：8 条通过。
+- `pnpm lint`（Node 24.14.0）：通过。
+- `pnpm format:check`：通过。
+- `BUILD_STANDALONE=true pnpm --filter @readest/readest-app build-web`（Node 24.14.0，
+  使用虚拟 HTTPS 配置）：通过，生成 standalone server 和动态 `/runtime-config.js`。
+- 全量 `pnpm test`（Node 24.14.0）：539 个测试文件、7253 条测试通过；仅
+  `turso-node.test.ts` 中 3 条既有向量距离浮点精度断言失败，与本阶段改动无关。
+- 本机没有 Docker CLI，`docker compose config` 尚未执行；YAML 与 dotenv 静态语法
+  检查通过，必须在目标服务器部署前补跑 compose config。
+
+2026-07-27 原生候选安装包构建：
+
+- 在 `codex/self-hosted-supabase-auth` 分支的提交 `4e97c670` 上手动运行
+  `Fork Release Installers`，参数为 `publish_release=false`。
+- 元数据、Android、Windows x64、Windows ARM64、Linux x64、Linux ARM64 和 macOS
+  Universal 作业全部成功；Android 同时完成 APK 签名与 zipalign 验证。
+- 该次 Android 作业没有取得 `ANDROID_KEY_*` Secrets，因此使用了每次运行都会变化的
+  临时签名证书；产物只能用于本轮安装测试，不能作为后续可覆盖升级的基线。
+- `Publish GitHub Release` 按预期跳过，没有创建标签或正式 Release。
+- 六组 Actions artifacts 已上传并保留 30 天，用于安装后的登录、会话恢复和跨设备同步
+  验收。
+
+2026-07-28 长期 Android 签名与候选构建验证：
+
+- 仓库已配置 `ANDROID_KEY_BASE64`、`ANDROID_KEY_ALIAS` 和
+  `ANDROID_KEY_PASSWORD`；文档和日志只记录 Secret 名称及使用结果，不记录任何值。
+- 在当前分支提交 `9fa6e75f` 上手动运行 `Fork Release Installers`
+  （Actions run `30322520270`），参数仍为 `publish_release=false`。
+- Android 签名步骤成功，运行时日志明确输出
+  `Using the stable Android signing key configured in repository secrets.`；随后 universal
+  与 ARM64 APK 构建、签名校验、zipalign 校验和 artifact 上传全部成功，没有执行临时
+  密钥回退。
+- Windows x64、Windows ARM64、Linux x64、Linux ARM64 和 macOS Universal 作业也
+  全部成功；`Publish GitHub Release` 按预期跳过。
+- 六组 artifact 均以完整提交 SHA 命名并保留至 2026-08-27。此前安装过临时证书 APK
+  的设备需要先卸载一次，才能安装首个长期签名 APK；从此以后，只要继续使用同一份
+  keystore、alias 和密码，后续 APK 可以正常覆盖升级。
+
+下一阶段：
+
+1. Android 与 macOS 的登录、应用重启会话恢复、登出和重新登录已经通过。
+2. 跨设备书籍和进度同步已经通过；笔记与其余设置仍应继续补充真机覆盖。
+3. S3 endpoint、region、bucket 未进入服务器设置副本的问题已进入独立正式修复，见下一节。
+4. 完成正式修复候选包的跨设备真机验证前，不把相关分支合并到 `master`。
+
+### 3.3.2 设置副本缺失字段正式修复
+
+分支：`codex/fix-settings-replica-backfill`
+
+核心提交：`7d1a1675 fix: backfill missing replica settings`
+
+2026-07-28 的真实现象与证据：
+
+- macOS 已配置 Readest 登录和 S3 后，Android 登录同一账户时，S3 表单没有自动出现
+  endpoint、region 和 bucket，界面长时间显示同步进行中。
+- 数据库安全检查确认 `public.replicas` 的 settings 单例中存在已加密的
+  `s3.accessKeyId` 和 `s3.secretAccessKey`，但不存在 `s3.endpoint`、`s3.region` 和
+  `s3.bucket`。
+- Android 手工补上缺失的非敏感字段后，临时恢复方案验证成功，证明认证、加密密钥解密
+  和 S3 连接本身正常，故障位于设置副本字段不完整及表单未刷新。
+
+根因：
+
+- 应用启动时 `initSettingsSync(initialSettings)` 会用磁盘设置初始化已发布快照，防止新
+  设备以本地默认值覆盖服务器权威设置。
+- 如果 S3 是在登录前配置的，磁盘上已有 endpoint、region、bucket；登录后这些值因为
+  与已初始化快照相同，不会被普通变更发布器视为新变更。
+- 凭据同步使用独立哈希和加密流程，因此可能只把 Access Key、Secret Key 写入服务器，
+  形成“有密钥、无连接元数据”的部分 settings 行。
+- `S3Form` 原先只在组件挂载时把 Zustand 设置复制进 React state；副本拉取稍后到达时，
+  已打开的表单不会更新。
+
+正式修复行为：
+
+1. settings 启动全量拉取成功后，收集服务器实际存在的字段路径；只用本地有意义的值
+   补齐服务器缺失字段，绝不覆盖服务器已有字段。
+2. 增量拉取的空结果只表示游标之后没有变化，不能解释为服务器字段缺失，因此不会触发
+   回填。
+3. `dictionarySettings.providerOrder` 等要求显式用户操作的字段仍不自动发布。
+4. 加密字段继续遵守“凭据同步”开关和口令解锁流程；开关关闭时不会提示口令、不会上传
+   S3 密钥。服务器已经存在的加密字段也不会重传。
+5. 未激活且未被用户编辑的 S3 表单会在远端设置异步到达时刷新；如果用户已经开始输入，
+   远端更新不会覆盖正在编辑的草稿。
+
+验证结果：
+
+- 回归过程先确认新增测试因缺少回填函数而失败，再完成实现。
+- 设置发布、拉取编排和 S3 表单相关测试：3 个文件、60 条全部通过。
+- `pnpm lint`：通过，TypeScript 与 Biome lint 无错误。
+- `pnpm -w format:check`：通过。
+- 全量 Vitest：541 个测试文件中 540 个通过；7259 条通过、3 条跳过、3 条失败。失败仍
+  全部是 `turso-node.test.ts` 的既有向量距离浮点精度断言（期望 5、实际约
+  4.997041），与本次设置同步修复无关。
+- 分支推送触发的 `Fork Web and API Image`（Actions run `30327656397`）成功完成，
+  并发布仅以本次提交 SHA 标识的候选镜像。
+- 手动运行 `Fork Release Installers`（Actions run `30327709979`，
+  `publish_release=false`）：Android、macOS Universal、Windows x64/ARM64、Linux
+  x64/ARM64 全部成功；Release 作业按预期跳过。
+- Android 使用仓库稳定签名密钥，universal 与 ARM64 APK 的构建、签名校验、
+  zipalign 校验和 artifact 上传全部成功。六组 artifact 对应提交
+  `e29ea9912e9c62317fe0664f75620809f2effad5`，保留至 2026-08-27。
+
+合并前真机验收重点：
+
+1. 设备 A 使用旧的“不完整 settings 行”启动新候选包，确认一次全量拉取后服务器自动
+   补齐 endpoint、region、bucket。
+2. 清空设备 B 的本地应用数据或使用未配置过 S3 的设备，登录并解锁凭据同步，确认 S3
+   表单自动出现完整配置，随后手动连接成功。
+3. 在设备 B 表单内先输入未保存内容，再等待或触发设置拉取，确认用户草稿不会被覆盖。
+4. 确认书籍、进度和原有 S3 文件同步行为无回归后，方可合并到长期开发分支或
+   `master`。
+
+2026-07-28 真机验收结论：
+
+- 用户确认本次正式修复候选版本测试验证通过。
+- 设置副本缺失字段回填与跨设备 S3 配置恢复符合预期，未报告书籍、进度或原有 S3
+  文件同步回归。
+- 本分支已经满足进入合并审核的测试条件；仍须取得明确授权后才能合并到 `master`，
+  不因验收通过自动发布 Release。
 
 ### 3.4 fork 专用 GitHub Actions
 
@@ -347,6 +573,8 @@ pnpm --filter @readest/readest-app exec vitest run \
 | 通用同步设置 UI | `src/components/settings/integrations/FileSyncForm.tsx` |
 | S3 设置 UI | `src/components/settings/integrations/S3Form.tsx` |
 | S3 provider | `src/services/sync/providers/s3/S3Provider.ts` |
+| 设置副本发布与缺失字段回填 | `src/services/sync/replicaSettingsSync.ts` |
+| 设置副本启动/增量拉取编排 | `src/hooks/useReplicaPull.ts` |
 | 阅读器初始化 | `src/store/readerStore.ts` |
 | 原生流式传输 | `src-tauri/src/transfer_file.rs` |
 | 本地诊断日志 | `src/utils/diagnosticLog.ts` |

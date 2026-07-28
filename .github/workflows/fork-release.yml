@@ -36,8 +36,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Test release metadata logic
-        run: node --test .github/scripts/release-metadata.test.mjs
+      - name: Test fork release helpers
+        run: node --test .github/scripts/*.test.mjs
 
       - name: Detect version change
         id: release
@@ -101,8 +101,12 @@ jobs:
           cache-all-crates: "true"
           cache-workspace-crates: "true"
 
-      - name: Prepare Tauri environment
-        run: cp "$APP_DIR/.env.tauri" "$APP_DIR/.env.local"
+      - name: Prepare self-hosted Tauri environment
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_API_BASE_URL: ${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+        run: node .github/scripts/prepare-fork-env.mjs "$APP_DIR/.env.tauri" "$APP_DIR/.env.local"
 
       - name: Generate Android project
         working-directory: ${{ env.APP_DIR }}
@@ -290,8 +294,12 @@ jobs:
             "https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/b3a9e985cdedf7efa81d172f182cd13983743147/useful-tools/quick-sharun.sh"
           chmod +x "$cache_dir/quick-sharun.sh"
 
-      - name: Prepare Tauri environment
-        run: cp "$APP_DIR/.env.tauri" "$APP_DIR/.env.local"
+      - name: Prepare self-hosted Tauri environment
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_API_BASE_URL: ${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+        run: node .github/scripts/prepare-fork-env.mjs "$APP_DIR/.env.tauri" "$APP_DIR/.env.local"
 
       - name: Build release installer
         env:

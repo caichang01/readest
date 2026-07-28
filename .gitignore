@@ -1,5 +1,6 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 docker/.env
+docker/.env.external-supabase
 
 # dependencies
 /node_modules
@@ -53,4 +54,3 @@ result*
 
 .claude/worktrees
 .claude/settings.local.json
-

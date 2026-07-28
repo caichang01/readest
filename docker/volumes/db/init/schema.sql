@@ -134,3 +134,31 @@ GRANT ALL ON public.books TO authenticated;
 GRANT ALL ON public.book_configs TO authenticated;
 GRANT ALL ON public.book_notes TO authenticated;
 GRANT ALL ON public.files TO authenticated;
+
+-- Current-schema copy of migration 018. Existing installations apply the
+-- forward migration; fresh databases receive the RPC directly from schema.sql.
+CREATE OR REPLACE FUNCTION public.get_storage_by_book_hash(p_user_id uuid)
+RETURNS TABLE (
+  "bookHash" text,
+  "fileCount" bigint,
+  "totalSize" bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+  SELECT
+    f.book_hash AS "bookHash",
+    count(*)::bigint AS "fileCount",
+    COALESCE(sum(f.file_size), 0)::bigint AS "totalSize"
+  FROM public.files AS f
+  WHERE f.user_id = p_user_id
+    AND f.deleted_at IS NULL
+  GROUP BY f.book_hash
+  ORDER BY "totalSize" DESC;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_storage_by_book_hash(uuid) FROM PUBLIC;
+GRANT SELECT ON public.files TO service_role;
+GRANT EXECUTE ON FUNCTION public.get_storage_by_book_hash(uuid) TO service_role;

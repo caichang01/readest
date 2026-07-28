@@ -23,6 +23,7 @@ vi.mock('@/services/sync/passphraseGate', () => ({
 import {
   __resetSettingsSyncForTests,
   applyRemoteSettings,
+  backfillMissingRemoteSettings,
   initSettingsSync,
   publishSettingsIfChanged,
 } from '@/services/sync/replicaSettingsSync';
@@ -84,6 +85,74 @@ afterEach(() => {
 });
 
 describe('publishSettingsIfChanged', () => {
+  test('backfills local S3 connection metadata that is missing remotely after disk priming', async () => {
+    const diskSettings = makeSettings({
+      s3: {
+        endpoint: 'https://acc.r2.cloudflarestorage.com',
+        region: 'auto',
+        bucket: 'readest',
+        accessKeyId: 'AKIA',
+        secretAccessKey: 'shh',
+      } as SystemSettings['s3'],
+      syncCategories: { credentials: true },
+    });
+    useSettingsStore.setState({ settings: diskSettings });
+    initSettingsSync(diskSettings);
+
+    await backfillMissingRemoteSettings(new Set(['s3.accessKeyId', 's3.secretAccessKey']));
+
+    expect(publishMock).toHaveBeenCalledTimes(1);
+    const patch = publishMock.mock.calls[0]![1].patch as Partial<SystemSettings>;
+    expect(patch.s3?.endpoint).toBe('https://acc.r2.cloudflarestorage.com');
+    expect(patch.s3?.region).toBe('auto');
+    expect(patch.s3?.bucket).toBe('readest');
+    expect(patch.s3?.accessKeyId).toBeUndefined();
+    expect(patch.s3?.secretAccessKey).toBeUndefined();
+  });
+
+  test('missing-field backfill never overwrites fields already present remotely', async () => {
+    const diskSettings = makeSettings({
+      s3: {
+        endpoint: 'https://local.example.com',
+        region: 'local-region',
+        bucket: 'local-bucket',
+        accessKeyId: '',
+        secretAccessKey: '',
+      } as SystemSettings['s3'],
+    });
+    useSettingsStore.setState({ settings: diskSettings });
+    initSettingsSync(diskSettings);
+
+    await backfillMissingRemoteSettings(new Set(['s3.endpoint', 's3.region', 's3.bucket']));
+
+    expect(publishMock).toHaveBeenCalledTimes(1);
+    const patch = publishMock.mock.calls[0]![1].patch as Partial<SystemSettings>;
+    expect(patch.s3).toBeUndefined();
+  });
+
+  test('missing-field backfill omits encrypted credentials when credential sync is disabled', async () => {
+    const diskSettings = makeSettings({
+      s3: {
+        endpoint: '',
+        region: '',
+        bucket: '',
+        accessKeyId: 'AKIA',
+        secretAccessKey: 'shh',
+      } as SystemSettings['s3'],
+      syncCategories: {},
+    });
+    useSettingsStore.setState({ settings: diskSettings });
+    initSettingsSync(diskSettings);
+
+    await backfillMissingRemoteSettings(new Set());
+
+    expect(ensurePassphraseMock).not.toHaveBeenCalled();
+    expect(publishMock).toHaveBeenCalledTimes(1);
+    const patch = publishMock.mock.calls[0]![1].patch as Partial<SystemSettings>;
+    expect(patch.s3?.accessKeyId).toBeUndefined();
+    expect(patch.s3?.secretAccessKey).toBeUndefined();
+  });
+
   test('first call publishes every populated whitelisted field', async () => {
     await publishSettingsIfChanged(makeSettings());
     expect(publishMock).toHaveBeenCalledTimes(1);

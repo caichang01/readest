@@ -197,6 +197,81 @@ const setStoredLastSeenCipher = (val: Record<string, string>): void => {
   }
 };
 
+/**
+ * Fill only fields that are absent from the authoritative remote settings
+ * singleton after a successful full boot pull.
+ *
+ * `initSettingsSync` deliberately primes the local snapshot from disk so an
+ * existing installation cannot overwrite remote values during startup. That
+ * protection also means settings configured before the user signs in never
+ * look "changed" and therefore cannot populate a partially-created remote
+ * row. This reconciliation closes that gap without weakening disk priming:
+ *
+ * - remote fields always win; only absent paths are considered
+ * - empty local values are ignored
+ * - paths requiring explicit user publication remain gated
+ * - credentials retain the credentials-sync and passphrase gates
+ */
+export const backfillMissingRemoteSettings = async (
+  remotePaths: ReadonlySet<string>,
+): Promise<void> => {
+  const settings = useSettingsStore.getState().settings;
+  if (!settings) return;
+
+  const plainMissing: Array<{ path: string; value: unknown }> = [];
+  const encryptedMissing: Array<{ path: string; value: unknown; hash: string }> = [];
+  const credentialsSync = isCredentialsSyncEnabled();
+
+  for (const path of SETTINGS_WHITELIST) {
+    if (remotePaths.has(path) || PATHS_REQUIRING_EXPLICIT_PUBLISH.has(path)) continue;
+    const value = readPath(settings, path);
+    if (!isMeaningful(value)) continue;
+
+    if (ENCRYPTED_PATHS.has(path)) {
+      if (!credentialsSync) continue;
+      encryptedMissing.push({ path, value, hash: await sha256Hex(value) });
+    } else {
+      plainMissing.push({ path, value });
+    }
+  }
+
+  if (plainMissing.length === 0 && encryptedMissing.length === 0) return;
+
+  if (encryptedMissing.length > 0 && !cryptoSession.isUnlocked()) {
+    try {
+      await ensurePassphraseUnlocked();
+    } catch {
+      // A cancelled unlock must not block safe plaintext metadata from
+      // being backfilled. The crypto middleware drops encrypted fields
+      // while locked, and their hashes remain unset so a later boot can
+      // retry after the user unlocks.
+    }
+  }
+
+  const patch: Record<string, unknown> = {};
+  for (const { path, value } of plainMissing) {
+    writePath(patch, path, value);
+  }
+  for (const { path, value } of encryptedMissing) {
+    writePath(patch, path, value);
+  }
+
+  const record: SettingsRemoteRecord = {
+    name: 'singleton',
+    patch: patch as Partial<SystemSettings>,
+  };
+  await publishReplicaUpsert(SETTINGS_KIND, record, SETTINGS_REPLICA_ID);
+
+  for (const { path, value } of plainMissing) {
+    lastPublishedFields.set(path, value);
+  }
+  if (cryptoSession.isUnlocked()) {
+    for (const { path, hash } of encryptedMissing) {
+      setStoredEncryptedHash(path, hash);
+    }
+  }
+};
+
 export const publishSettingsIfChanged = async (settings: SystemSettings): Promise<void> => {
   // Pass 1: figure out what's changed. Plaintext paths use the
   // in-memory snapshot; encrypted paths compare against the
