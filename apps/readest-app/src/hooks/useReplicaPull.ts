@@ -22,6 +22,7 @@ import { opdsCatalogAdapter } from '@/services/sync/adapters/opdsCatalog';
 import { settingsAdapter, type SettingsRemoteRecord } from '@/services/sync/adapters/settings';
 import {
   applyRemoteSettings,
+  backfillMissingRemoteSettings,
   clearStoredEncryptedHashes,
   getStoredLastSeenCipher,
   publishSettingsIfChanged,
@@ -362,16 +363,45 @@ const runPullForKind = async (
       );
       return;
     case 'settings':
-      await replicaPullAndApply(
-        buildReplicaPullDeps(
+      {
+        const deps = buildReplicaPullDeps(
           ctx.manager,
           service,
           envConfig,
           settingsPullConfig(envConfig),
           pullOpts,
           pullOverride,
-        ),
-      );
+        );
+        const isFullBootPull = pullOverride === undefined && pullOpts?.since === null;
+        if (!isFullBootPull) {
+          await replicaPullAndApply(deps);
+          return;
+        }
+
+        // A full settings boot pull is the only trustworthy point at
+        // which an absent field means "not present remotely". An empty
+        // incremental response only means "unchanged since cursor" and
+        // must never trigger local backfill.
+        const remotePaths = new Set<string>();
+        let pullCompleted = false;
+        const pull = deps.pull;
+        await replicaPullAndApply({
+          ...deps,
+          pull: async () => {
+            const rows = await pull();
+            for (const row of rows) {
+              for (const path of Object.keys(row.fields_jsonb)) {
+                remotePaths.add(path);
+              }
+            }
+            pullCompleted = true;
+            return rows;
+          },
+        });
+        if (pullCompleted) {
+          await backfillMissingRemoteSettings(remotePaths);
+        }
+      }
       return;
   }
 };

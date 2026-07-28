@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 
 const pullSpy = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
+const backfillMissingRemoteSettingsSpy = vi.hoisted(() =>
+  vi.fn<(remotePaths: ReadonlySet<string>) => Promise<void>>(async () => {}),
+);
 const getReplicaSyncSpy = vi.fn();
 const readyListeners = new Set<() => void>();
 const subscribeReplicaSyncReadySpy = vi.fn((listener: () => void) => {
@@ -28,6 +31,15 @@ let authValue: { user: { id: string } | null } = { user: { id: 'test-user' } };
 vi.mock('@/services/sync/replicaPullAndApply', () => ({
   replicaPullAndApply: (...args: unknown[]) => pullSpy(...args),
 }));
+
+vi.mock('@/services/sync/replicaSettingsSync', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/sync/replicaSettingsSync')>();
+  return {
+    ...actual,
+    backfillMissingRemoteSettings: (remotePaths: ReadonlySet<string>) =>
+      backfillMissingRemoteSettingsSpy(remotePaths),
+  };
+});
 
 vi.mock('@/services/sync/adapters/dictionary', () => ({
   dictionaryAdapter: { kind: 'dictionary' },
@@ -139,6 +151,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   pullSpy.mockClear();
   pullSpy.mockResolvedValue(undefined);
+  backfillMissingRemoteSettingsSpy.mockClear();
   getReplicaSyncSpy.mockReset();
   subscribeReplicaSyncReadySpy.mockClear();
   readyListeners.clear();
@@ -660,6 +673,45 @@ describe('useReplicaPull — incremental auto-pull (visibility / online / interv
 });
 
 describe('useReplicaPull — settings boot pull sequencing', () => {
+  test('backfills only after a successful full settings pull and uses the remote field set', async () => {
+    const manager = makeManagerMock();
+    manager.pull.mockResolvedValue([
+      {
+        fields_jsonb: {
+          's3.accessKeyId': { v: { c: 'cipher' } },
+          's3.secretAccessKey': { v: { c: 'cipher' } },
+        },
+      },
+    ]);
+    pullSpy.mockImplementation(async (deps: unknown) => {
+      await (deps as { pull: () => Promise<unknown[]> }).pull();
+    });
+    getReplicaSyncSpy.mockReturnValue({ manager });
+    renderHook(() => useReplicaPull({ kinds: ['dictionary'], delayMs: 100 }));
+
+    await act(async () => {
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(backfillMissingRemoteSettingsSpy).toHaveBeenCalledTimes(1);
+    const remotePaths = backfillMissingRemoteSettingsSpy.mock.calls[0]![0];
+    expect([...remotePaths].sort()).toEqual(['s3.accessKeyId', 's3.secretAccessKey']);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Incremental empty/unchanged pulls must not be interpreted as a
+    // remotely-empty settings row and must not initiate another backfill.
+    expect(backfillMissingRemoteSettingsSpy).toHaveBeenCalledTimes(1);
+  });
+
   test('settings is pulled FIRST, before other kinds, even when caller did not request it', async () => {
     // Block the settings pull on a manual resolver so we can verify
     // dict pull only fires AFTER settings completes. Real-world
