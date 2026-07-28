@@ -445,6 +445,9 @@ Android 正式可更新签名依赖仓库 Secrets：
   阻止发布。
 - 测试严格按照红灯到绿灯执行：环境与 overlay 5 条、清单映射 3 条均通过；连同既有
   Release 元数据测试，全部 GitHub 脚本测试共 12 条通过。
+- 第一阶段提交为 `0e209424 feat: prepare fork updater trust chain`；分支推送触发的
+  `Fork Web and API Image`（Actions run `30337935839`）成功完成并发布不可变 SHA
+  候选镜像。
 - 尚未把新配置和清单生成器接入 `fork-release.yml`，也没有改变客户端端点、生成签名
   产物或发布 `latest.json`。在配置长期 Tauri 私钥前，不运行会发布更新的候选流程。
 
