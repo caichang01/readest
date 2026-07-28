@@ -451,6 +451,55 @@ Android 正式可更新签名依赖仓库 Secrets：
 - 尚未把新配置和清单生成器接入 `fork-release.yml`，也没有改变客户端端点、生成签名
   产物或发布 `latest.json`。在配置长期 Tauri 私钥前，不运行会发布更新的候选流程。
 
+2026-07-28 第二阶段进展：
+
+- GitHub 仓库已配置长期 updater 签名 Secret
+  `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，以及公开构建变量
+  `NEXT_PUBLIC_UPDATER_BASE_URL`、`NEXT_PUBLIC_UPDATER_PUBKEY`；只核对了配置名称，
+  没有读取或输出 Secret 内容。
+- `Fork Release Installers` 会把 fork 更新端点和公钥写入原生应用环境，并在桌面构建时
+  生成一次性 `fork-ci-tauri-config.generated.json`。该 overlay 开启 updater artifacts，
+  只保留 fork 的一个 `latest.json` 端点；旧的静态禁用配置已删除，生成文件被
+  `.gitignore` 排除。
+- Android APK 在系统 APK 签名和对齐校验后，再用长期 Tauri/minisign 密钥生成相邻
+  `.sig`；Windows NSIS、macOS `.app.tar.gz` 和 Linux AppImage 由 Tauri 构建器生成
+  updater 签名。Release 汇总阶段要求恰好取得 7 份签名，缺失任何平台都会失败。
+- Release 作业会收集各平台签名产物，生成带精确版本 Tag 下载 URL 的 `latest.json`，
+  同时发布 `release-notes.json` 和 `SHA256SUMS`。清单覆盖 Android universal/ARM64、
+  Windows NSIS x64/ARM64、macOS Universal 双架构键和 Linux AppImage x64/ARM64。
+- 稳定版客户端的清单、发行说明和公开验证密钥改为由 fork 构建变量注入；fork CI 缺失
+  配置会在编译前失败。Android、Linux AppImage 及既有 Windows portable 自定义下载
+  路径均先验证 minisign 签名，验签失败会中止安装；macOS 和 Windows NSIS 继续由
+  Tauri updater 完成验签和安装。
+- 新增工作流契约与签名资产收集测试。Node 24 下，GitHub 脚本测试 17 条、updater 与
+  constants 前端测试 183 条全部通过；受控全量测试覆盖 541 个文件，7263 条通过、
+  3 条跳过，仅 `turso-node.test.ts` 的 3 条既有向量距离浮点精度断言失败。类型检查、
+  Biome lint 和格式检查通过。本机未安装 Cargo，Rust 编译与现有验签单元测试交由
+  跨平台候选 Actions 覆盖。
+- 实现提交为 `5e014c22 feat: publish signed fork updates`。手动候选流水线
+  `Fork Release Installers` 全部使用 `publish_release=false`，只验证各平台构建和签名
+  产物，不创建 Release。
+- 首次候选 run `30341766964` 发现 GitHub Variable
+  `NEXT_PUBLIC_UPDATER_PUBKEY` 末尾误带一个 `%`；构建前校验按设计拒绝了无效 Base64，
+  因而未使用错误信任链继续编译。修正公开变量且不输出私钥后，候选 run
+  `30342573290` 成功验证 Windows x64/ARM64、Linux x64/ARM64 的构建、updater `.sig`
+  收集与 artifact 上传；Android universal/ARM64 APK 也完成系统签名、对齐校验、两份
+  minisign `.sig` 生成与 artifact 上传。
+- run `30342573290` 进一步发现 macOS 矩阵把 bundles 强制限制为 `dmg`，Tauri 因没有
+  构建 updater-enabled `app` 目标而不会生成 `.app.tar.gz`。提交
+  `a92f41bf fix: build macOS updater bundle` 移除该限制，恢复与上游已验证 Universal
+  构建参数一致的 `targets: all` 行为，并新增工作流回归断言。
+- `5e014c22` 与 `a92f41bf` 对应的 Web/API 候选 runs `30341725849`、
+  `30345475227` 均成功。包含 macOS 修复的最终非发布跨平台候选 run 为
+  `30346451019`：Android、macOS Universal、Windows x64/ARM64、Linux x64/ARM64
+  全部成功，Release 作业按预期跳过。
+- macOS 在修复后生成并上传 updater-enabled Universal app 归档及签名；Android
+  universal/ARM64 APK 完成长期系统签名、对齐校验和两份 minisign 签名。六组候选
+  artifacts 均以提交 `a92f41bf3e09c349a587d90fdf8169dc0147f39a` 命名且未过期。
+- 本轮只证明签名候选产物能在全部目标平台稳定生成，不代表正式更新链已经完成终端验收。
+  合并前仍需用候选包验证应用功能；合并并提升版本号后，需再执行一次旧版本到新版本的
+  `latest.json` 检查、下载、验签与安装升级测试。
+
 ### 3.5 本地 Android 构建
 
 2026-07-22 已验证的环境：
