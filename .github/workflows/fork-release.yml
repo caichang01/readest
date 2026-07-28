@@ -232,7 +232,7 @@ jobs:
             platform: macos
             runs_on: macos-latest
             rust_targets: x86_64-apple-darwin,aarch64-apple-darwin
-            tauri_args: --target universal-apple-darwin --bundles dmg
+            tauri_args: --target universal-apple-darwin
             artifact_name: readest-macos-universal
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 75

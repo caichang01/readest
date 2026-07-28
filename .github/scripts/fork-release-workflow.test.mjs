@@ -23,4 +23,6 @@ test('fork release signs Android packages and publishes a generated latest manif
 test('desktop updater builds use the generated fork-only Tauri overlay', () => {
   assert.match(workflow, /fork-ci-tauri-config\.generated\.json/);
   assert.doesNotMatch(workflow, /--config src-tauri\/fork-ci-tauri-config\.json(?:\s|$)/);
+  assert.match(workflow, /tauri_args: --target universal-apple-darwin(?:\r?\n)/);
+  assert.doesNotMatch(workflow, /universal-apple-darwin --bundles dmg/);
 });
