@@ -1,6 +1,6 @@
 # Readest fork 二次开发交接记录
 
-最后更新：2026-07-27
+最后更新：2026-07-28
 
 这份文档记录本 fork 相对上游 Readest 的产品目标、已经完成的改造、验证结果、已知问题和后续计划。开始新的 fork 专属开发前，应先阅读本文；完成一个阶段后，应同步更新日期、提交、测试结果和未完成事项。
 
@@ -9,7 +9,7 @@
 当前 Git 状态（截至最后更新）：
 
 - `master` 已合并生产化诊断功能和经过真机验收的 S3 书籍恢复修复。
-- 自建 Supabase 登录与数据库接入正在分支 `codex/self-hosted-supabase-auth` 开发；Auth、数据库基线、客户端构建配置、Web/API 部署和登录验收已经完成，存储统计 RPC 修复正在合并前验证，因此尚不得提前合并到 `master`。
+- 自建 Supabase 登录与数据库接入正在分支 `codex/self-hosted-supabase-auth` 开发；Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署和登录验收已经完成。长期 Android 签名与跨平台候选构建也已验证；安装后的原生端登录、会话恢复和跨设备同步验收完成前，尚不得合并到 `master`。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -236,9 +236,27 @@
   `Fork Release Installers`，参数为 `publish_release=false`。
 - 元数据、Android、Windows x64、Windows ARM64、Linux x64、Linux ARM64 和 macOS
   Universal 作业全部成功；Android 同时完成 APK 签名与 zipalign 验证。
+- 该次 Android 作业没有取得 `ANDROID_KEY_*` Secrets，因此使用了每次运行都会变化的
+  临时签名证书；产物只能用于本轮安装测试，不能作为后续可覆盖升级的基线。
 - `Publish GitHub Release` 按预期跳过，没有创建标签或正式 Release。
 - 六组 Actions artifacts 已上传并保留 30 天，用于安装后的登录、会话恢复和跨设备同步
   验收。
+
+2026-07-28 长期 Android 签名与候选构建验证：
+
+- 仓库已配置 `ANDROID_KEY_BASE64`、`ANDROID_KEY_ALIAS` 和
+  `ANDROID_KEY_PASSWORD`；文档和日志只记录 Secret 名称及使用结果，不记录任何值。
+- 在当前分支提交 `9fa6e75f` 上手动运行 `Fork Release Installers`
+  （Actions run `30322520270`），参数仍为 `publish_release=false`。
+- Android 签名步骤成功，运行时日志明确输出
+  `Using the stable Android signing key configured in repository secrets.`；随后 universal
+  与 ARM64 APK 构建、签名校验、zipalign 校验和 artifact 上传全部成功，没有执行临时
+  密钥回退。
+- Windows x64、Windows ARM64、Linux x64、Linux ARM64 和 macOS Universal 作业也
+  全部成功；`Publish GitHub Release` 按预期跳过。
+- 六组 artifact 均以完整提交 SHA 命名并保留至 2026-08-27。此前安装过临时证书 APK
+  的设备需要先卸载一次，才能安装首个长期签名 APK；从此以后，只要继续使用同一份
+  keystore、alias 和密码，后续 APK 可以正常覆盖升级。
 
 下一阶段：
 
