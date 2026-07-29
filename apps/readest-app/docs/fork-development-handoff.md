@@ -500,6 +500,31 @@ Android 正式可更新签名依赖仓库 Secrets：
   合并前仍需用候选包验证应用功能；合并并提升版本号后，需再执行一次旧版本到新版本的
   `latest.json` 检查、下载、验签与安装升级测试。
 
+2026-07-29 合并与首个正式 Release：
+
+- 用户完成候选包基本功能验证后，`codex/self-hosted-updater` 通过
+  `5ea031d2 merge: add fork-owned updater release chain` 合并到 `master` 并推送远端；
+  应用版本按要求保持 `0.11.18`。
+- 版本没有变化，因此 push 触发的 installer run `30412552352` 不具备自动发布条件。
+  在相同提交的强制发布 run 排队后，该冗余非发布 run 被取消；这不影响独立的 Web/API
+  run `30412552380`，后者成功发布 `master`、`latest` 和不可变 SHA 镜像。
+- 手动以 `publish_release=true` 运行 `Fork Release Installers`
+  （run `30413045061`）：Android、macOS Universal、Windows x64/ARM64、Linux
+  x64/ARM64 和最终 Release 作业全部成功。
+- 正式 `v0.11.18` Release 指向合并提交 `5ea031d2`，不是 draft 或 prerelease，并成为
+  仓库 latest Release。20 个 Release assets 全部处于 uploaded 状态，包括各平台安装包、
+  7 份 updater `.sig`、`latest.json`、`release-notes.json` 和 `SHA256SUMS`。
+- 已解析正式 `latest.json`：版本为 `0.11.18`，Android universal/ARM64、Windows
+  x64/ARM64、Linux AppImage x64/ARM64 以及 macOS x64/ARM64 共 8 个平台键均包含
+  指向 `v0.11.18` 的精确下载 URL 和非空签名。GitHub latest Release API 也确认
+  `latest.json` 的公开下载资产已上传。
+- 本地通过 GitHub API 可以读取清单，但直接访问 GitHub Release CDN 时分别遇到
+  HTTP/2 framing error 和 SSL connection timeout；这是本机到 CDN 的网络验证限制，
+  不是 Release 资产缺失。后续仍应从真机网络打开公开下载地址做一次可达性检查。
+- 已安装的 `0.11.18` 候选包不会把正式 `0.11.18` 判断为更高版本。本 Release 用作正式
+  下载与信任基线；完整自动更新终端验收需要后续发布合法 SemVer `0.11.19`，再从
+  `0.11.18` 执行检查、下载、验签和安装升级。
+
 ### 3.5 本地 Android 构建
 
 2026-07-22 已验证的环境：
