@@ -677,16 +677,33 @@ fork 已验收的产品行为：
   距离、距离排序和向量类型行为验证；`turso-node` 53 条通过、1 条跳过。
 - 全量 Vitest：603 个测试文件全部通过；7919 条通过、1 条跳过。
 - 本机当前环境没有 `cargo` 和 `luajit`，因此 Rust fmt/clippy/test 与 KOReader Lua
-  测试需由后续 GitHub Actions 跨平台候选构建补齐；不能把“工具未安装”写成测试通过。
+  测试未在本机单独执行；不能把“工具未安装”写成测试通过。跨平台 Tauri/Rust 构建链
+  已由下述 GitHub Actions 候选矩阵覆盖。
+
+2026-07-29 的候选流水线验证：
+
+- 开发分支已推送至 `origin/codex/upstream-sync-20260729`，候选提交为
+  `fdd03ff823dbde35a0f65827b4ed7f90219487be`。
+- `Fork Web and API Image` run
+  [`30420126934`](https://github.com/caichang01/readest/actions/runs/30420126934)
+  成功；仅推送该提交对应的不可变 `sha-*` 分支候选镜像，没有更新 `master` 或
+  `latest` 标签。
+- `Fork Release Installers` run
+  [`30420151479`](https://github.com/caichang01/readest/actions/runs/30420151479)
+  使用 `publish_release=false` 成功。Android、Windows x64/ARM64、Linux x64/ARM64、
+  macOS Universal 六个构建任务全部通过，`Publish GitHub Release` 按候选模式正确跳过。
+- 本次 run 生成并保留六组未过期 artifacts：
+  `readest-android-fdd03ff8...`、`readest-windows-x64-fdd03ff8...`、
+  `readest-windows-arm64-fdd03ff8...`、`readest-linux-x64-fdd03ff8...`、
+  `readest-linux-arm64-fdd03ff8...` 和 `readest-macos-universal-fdd03ff8...`。
+- 这次 CI 结果证明全部目标平台可完成编译、签名、打包和 artifact 上传，但不能替代
+  Android/macOS 的账户、云同步、自动恢复及更新检查真机验收。
 
 合并 `master` 前仍需完成：
 
-1. 提交并推送本开发分支，手动运行 `Fork Release Installers` 且
-   `publish_release=false`，验证 Android、Windows、Linux、macOS 候选包；开发分支的
-   Web/API 候选镜像不得更新 `master` / `latest` 标签。
-2. 至少在 Android 与 macOS 验证登录/会话、Readest-only、S3-only、Readest + S3、
+1. 至少在 Android 与 macOS 验证登录/会话、Readest-only、S3-only、Readest + S3、
    跨设备书籍/进度/笔记/设置、删除本地副本后自动恢复和更新检查。
-3. 用户确认候选验收并明确授权后，才以普通 merge commit 合并到 `master`。由于版本
+2. 用户确认候选验收并明确授权后，才以普通 merge commit 合并到 `master`。由于版本
    已从 `0.11.18` 变为 `0.11.20`，届时 master 流水线会创建新的正式 Release。
 
 ## 4. S3 跨设备“无法打开书籍”调查
