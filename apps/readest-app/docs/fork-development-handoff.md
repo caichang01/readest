@@ -1,6 +1,6 @@
 # Readest fork 二次开发交接记录
 
-最后更新：2026-07-28
+最后更新：2026-07-29
 
 这份文档记录本 fork 相对上游 Readest 的产品目标、已经完成的改造、验证结果、已知问题和后续计划。开始新的 fork 专属开发前，应先阅读本文；完成一个阶段后，应同步更新日期、提交、测试结果和未完成事项。
 
@@ -10,7 +10,10 @@
 
 - `master` 已合并生产化诊断、S3 书籍恢复、自建 Supabase 登录/数据库接入和 S3 设置副本缺失字段修复；第一大需求的合并提交为 `3c74c661 merge: complete self-hosted Supabase integration`。
 - 自建 Supabase 的 Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署、长期 Android 签名、跨平台候选构建、原生端登录、会话恢复和跨设备同步均已完成验收。
-- 第二大需求“自有更新检查与发布链”从 `master` 建立独立分支 `codex/self-hosted-updater` 开发；已完成构建配置注入和跨平台清单映射的首组测试驱动实现，尚未接入正式流水线。
+- 第二大需求“自有更新检查与发布链”已经合并到 `master`；正式 `v0.11.18` Release、
+  fork updater 公钥、签名产物和 `latest.json` 已完成基线验收。
+- 第三大需求“受控同步上游功能”在 `codex/upstream-sync-20260729` 开发；本轮目标上游
+  基线为 `readest/readest:main` 的 `21e1ed5d`。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -37,6 +40,33 @@
 5. 不直接在 `master` 上开发，不在未经验证时创建版本 Release。
 
 项目规则要求使用 `pnpm worktree:new <branch>` 创建 worktree。不过当前 fork 的脚本仍硬编码 `origin/main`，而远端默认分支是 `origin/master`，因此创建 fork 分支时会失败。2026-07-22 的诊断任务在干净工作区内使用 `git switch -c` 安全回退。后续应单独修复 worktree 脚本，让它自动识别远端默认分支；修复前不要假装 worktree 初始化成功。
+
+### 1.3 上游同步兼容原则
+
+第三大需求采用“上游镜像、独立同步分支、分层解决冲突、完整验证后合并”的受控流程：
+
+1. `origin/upstream` 只镜像 `readest/readest:main`，不得混入 fork 专属提交。
+2. 每轮同步从已发布且验证通过的 `master` 创建 `codex/upstream-sync-*` 分支；禁止把
+   未验证的 `origin/upstream` 直接合并到 `master`。
+3. 使用普通 merge commit 保留共同祖先，不使用 squash 或 rebase 抹去上游合并边界，
+   以保证下一轮仍可进行标准三方合并。
+4. 文本自动合并不等于功能兼容。所有双方共同修改的文件都必须按产品行为重新审查，
+   尤其是访问策略、登录、自建 Supabase、云同步、S3、更新器、版本和 GitHub Actions。
+5. 新引入的上游功能如果与 fork 二次开发发生冲突，必须兼容已经验收的 fork 能力；
+   不得为快速解决冲突而恢复会员门槛、用户云配额、支付/IAP、上游服务端点、上游更新
+   公钥或上游发布流程。
+6. 云同步优先采用上游持续维护的新架构，但必须保留自定义 S3 endpoint、凭据加密同步、
+   settings 缺失字段回填、书籍自动恢复、生产化诊断和第三方存储免会员能力。多 provider
+   行为必须同时覆盖 S3-only、Readest Cloud + S3 以及其他第三方组合。
+7. 上游新增或修改的 `.github/workflows` 一律先进入
+   `.github/upstream-workflows-disabled/`；活动工作流继续使用明确白名单，未经 fork 审核
+   不得执行上游部署、R2、Docker Hub、商店或正式发布动作。
+8. 冲突解决完成后必须执行 fork 不变量测试、目标回归、全量测试、原生检查、数据库验证、
+   非发布跨平台候选构建和真机验收。只有这些检查通过，才可经用户明确授权合并
+   `master`。
+
+每次上游同步都要记录共同祖先、目标上游 SHA、冲突清单、兼容决策、测试结果和未完成
+风险。上游版本号只作为代码来源参考；fork Release 必须保持合法且单调递增的 SemVer。
 
 ## 2. 项目技术基线
 
