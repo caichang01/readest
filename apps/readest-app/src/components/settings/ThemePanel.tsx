@@ -25,13 +25,15 @@ import { DefaultHighlightColor, HighlightColor, UserHighlightColor } from '@/typ
 import clsx from 'clsx';
 import { SettingLabel } from './primitives';
 import { HIGHLIGHT_COLOR_HEX } from '@/services/constants';
-import ThemeEditor from './color/ThemeEditor';
-import ThemeModeSelector from './color/ThemeModeSelector';
-import ThemeColorSelector from './color/ThemeColorSelector';
-import BackgroundTextureSelector from './color/BackgroundTextureSelector';
-import HighlightColorsEditor from './color/HighlightColorsEditor';
-import CodeHighlightingSettings from './color/CodeHighlightingSettings';
-import ReadingRulerSettings from './color/ReadingRulerSettings';
+import ThemeEditor from './theme/ThemeEditor';
+import ThemeModeSelector from './theme/ThemeModeSelector';
+import ThemeColorSelector from './theme/ThemeColorSelector';
+import BackgroundTextureSelector from './theme/BackgroundTextureSelector';
+import HighlightColorsEditor from './theme/HighlightColorsEditor';
+import CodeHighlightingSettings from './theme/CodeHighlightingSettings';
+import ReadingRulerSettings from './theme/ReadingRulerSettings';
+import { Toggle } from '../primitives/toggle';
+import LibrarySettings from './theme/LibrarySettings';
 
 const ThemePanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }) => {
   const _ = useTranslation();
@@ -84,6 +86,8 @@ const ThemePanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset
   const [readingRulerLines, setReadingRulerLines] = useState(viewSettings.readingRulerLines);
   const [readingRulerOpacity, setReadingRulerOpacity] = useState(viewSettings.readingRulerOpacity);
   const [readingRulerColor, setReadingRulerColor] = useState(viewSettings.readingRulerColor);
+
+  const [skeuomorphicCovers, setSkeuomorphicCovers] = useState(settings.librarySkeuomorphicCovers);
 
   const {
     textures: customTextures,
@@ -244,10 +248,16 @@ const ThemePanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset
           light: generateLightPalette(customTheme.colors.light),
           dark: generateDarkPalette(customTheme.colors.dark),
         },
-        isCustomizale: true,
+        isCustomizable: true,
       })),
     );
   }, [settings]);
+
+  useEffect(() => {
+    if (skeuomorphicCovers === settings.librarySkeuomorphicCovers) return;
+
+    saveSysSettings(envConfig, 'librarySkeuomorphicCovers', skeuomorphicCovers);
+  }, [skeuomorphicCovers]);
 
   const handleSaveCustomTheme = (customTheme: CustomTheme) => {
     applyCustomTheme(customTheme);
@@ -331,7 +341,12 @@ const ThemePanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset
   };
 
   return (
-    <div className='my-4 w-full space-y-6'>
+    // In editor mode the ThemeEditor owns its own top spacing (mt-6) and pins a
+    // sticky Save/Cancel footer to the scroll bottom. Dropping the wrapper's
+    // bottom margin here removes the gap between the editor's bottom edge and
+    // the scroll viewport, so the footer sits flush with no bottom gap and no
+    // upward jump when scrolled to the end.
+    <div className={clsx('w-full', showCustomThemeEditor ? '' : 'my-4 space-y-6')}>
       {showCustomThemeEditor ? (
         <ThemeEditor
           customTheme={editTheme}
@@ -356,9 +371,7 @@ const ThemePanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset
             )}
           >
             <SettingLabel>{_('Invert Image In Dark Mode')}</SettingLabel>
-            <input
-              type='checkbox'
-              className='toggle'
+            <Toggle
               checked={invertImgColorInDark}
               disabled={!isDarkMode}
               onChange={() => setInvertImgColorInDark(!invertImgColorInDark)}
@@ -370,12 +383,7 @@ const ThemePanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset
             className='flex cursor-pointer items-center justify-between px-4'
           >
             <SettingLabel>{_('Override Book Color')}</SettingLabel>
-            <input
-              type='checkbox'
-              className='toggle'
-              checked={overrideColor}
-              onChange={() => setOverrideColor(!overrideColor)}
-            />
+            <Toggle checked={overrideColor} onChange={() => setOverrideColor(!overrideColor)} />
           </label>
 
           <ThemeColorSelector
@@ -435,6 +443,12 @@ const ThemePanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset
             onToggle={setcodeHighlighting}
             onLanguageChange={setCodeLanguage}
             data-setting-id='settings.color.codeHighlighting'
+          />
+
+          <LibrarySettings
+            skeuomorphicCovers={skeuomorphicCovers}
+            onToggle={setSkeuomorphicCovers}
+            data-setting-id='settings.library.skeuomorphicCovers'
           />
         </>
       )}

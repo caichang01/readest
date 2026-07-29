@@ -1,13 +1,7 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import type { FoliateView } from '@/types/view';
 import type { Insets } from '@/types/misc';
-import type { Book, ViewSettings } from '@/types/book';
-import type { EnvConfigType } from '@/services/environment';
-
-const readerMocks = vi.hoisted(() => ({
-  documentOpen: vi.fn(),
-  recover: vi.fn(),
-}));
+import type { ViewSettings } from '@/types/book';
 
 vi.mock('@/store/bookDataStore', async () => {
   const { create } = await import('zustand');
@@ -59,12 +53,7 @@ vi.mock('@/services/constants', () => ({
   SUPPORTED_LANGNAMES: {},
 }));
 vi.mock('@/libs/document', () => ({
-  DocumentLoader: vi.fn(function MockDocumentLoader() {
-    return { open: readerMocks.documentOpen };
-  }),
-}));
-vi.mock('@/services/sync/file/readerBookRecovery', () => ({
-  tryRecoverThirdPartyBook: readerMocks.recover,
+  DocumentLoader: vi.fn(),
 }));
 vi.mock('@/services/opds/pseStream', () => ({
   isPseStreamFileName: () => false,
@@ -81,7 +70,7 @@ vi.mock('@/services/rss/feedReader', () => ({
 
 import { useReaderStore } from '@/store/readerStore';
 import { useBookDataStore } from '@/store/bookDataStore';
-import { useLibraryStore } from '@/store/libraryStore';
+import { uniqueId } from '@/utils/misc';
 
 /**
  * Helper to seed a minimal ViewState in the store for a given key.
@@ -119,8 +108,6 @@ describe('readerStore', () => {
       hoveredBookKey: null,
     });
     useBookDataStore.setState({ booksData: {} });
-    readerMocks.documentOpen.mockReset();
-    readerMocks.recover.mockReset();
   });
 
   describe('initial state', () => {
@@ -129,47 +116,6 @@ describe('readerStore', () => {
       expect(state.viewStates).toEqual({});
       expect(state.bookKeys).toEqual([]);
       expect(state.hoveredBookKey).toBeNull();
-    });
-  });
-
-  describe('initViewState recovery', () => {
-    test('re-downloads once and retries parsing after a managed book is corrupt', async () => {
-      const book = {
-        hash: 'bookid',
-        format: 'PDF',
-        title: 'Book',
-        author: 'A',
-        createdAt: 1,
-        updatedAt: 1,
-        uploadedAt: 10,
-        downloadedAt: 10,
-      } as Book;
-      vi.mocked(useLibraryStore.getState().getBookByHash).mockReturnValue(book);
-      readerMocks.recover.mockResolvedValue({ ...book, downloadedAt: 20 });
-      readerMocks.documentOpen
-        .mockRejectedValueOnce(new Error('corrupt file'))
-        .mockResolvedValueOnce({
-          book: {
-            metadata: {},
-            sections: [],
-            rendition: {},
-          },
-        });
-      const appService = {
-        loadBookContent: vi.fn(async () => ({ file: new File(['valid'], 'Book.pdf') })),
-        resolveNativeBookFilePath: vi.fn(async () => null),
-        loadBookConfig: vi.fn(async () => ({ updatedAt: 1, booknotes: [], viewSettings: {} })),
-      };
-      const envConfig = {
-        getAppService: vi.fn(async () => appService),
-      } as unknown as EnvConfigType;
-
-      await useReaderStore.getState().initViewState(envConfig, 'bookid', 'bookid-0', true, true);
-
-      expect(readerMocks.recover).toHaveBeenCalledTimes(1);
-      expect(readerMocks.recover).toHaveBeenCalledWith(envConfig, book, 'parse-book-document');
-      expect(readerMocks.documentOpen).toHaveBeenCalledTimes(2);
-      expect(useReaderStore.getState().getViewState('bookid-0')?.error).toBeNull();
     });
   });
 
@@ -381,6 +327,52 @@ describe('readerStore', () => {
 
       useReaderStore.getState().setViewInited('book-1', false);
       expect(useReaderStore.getState().viewStates['book-1']!.inited).toBe(false);
+    });
+  });
+
+  describe('recreateViewer', () => {
+    // Regression test for #5277: `initViewState` already mints a fresh
+    // viewerKey, so minting a second one here remounted <FoliateViewer> twice.
+    // The abandoned first mount kept opening the same bookDoc and left an extra
+    // `data` transform listener on its shared loader, so every stylesheet was
+    // transformed twice and the book's fonts were replaced by the app's.
+    test('mints a single viewerKey so the viewer mounts only once', async () => {
+      seedViewState('book-1', { viewerKey: 'book-1-uid-0' });
+
+      let counter = 0;
+      const uniqueIdMock = vi.mocked(uniqueId);
+      uniqueIdMock.mockImplementation(() => `uid-${++counter}`);
+
+      // Stand in for the real initViewState, which reloads the book and ends by
+      // assigning a fresh viewerKey of its own.
+      const initViewState = vi.fn(async (_envConfig: unknown, _id: string, key: string) => {
+        useReaderStore.setState((state) => ({
+          viewStates: {
+            ...state.viewStates,
+            [key]: { ...state.viewStates[key]!, viewerKey: `${key}-${uniqueId()}` },
+          },
+        }));
+      });
+      useReaderStore.setState({
+        initViewState: initViewState as unknown as ReturnType<
+          typeof useReaderStore.getState
+        >['initViewState'],
+      });
+
+      const mountedKeys: string[] = [];
+      const unsubscribe = useReaderStore.subscribe((state) => {
+        const viewerKey = state.viewStates['book-1']?.viewerKey;
+        if (viewerKey && mountedKeys.at(-1) !== viewerKey) mountedKeys.push(viewerKey);
+      });
+
+      useReaderStore.getState().recreateViewer({} as never, 'book-1');
+      await vi.waitFor(() => expect(initViewState).toHaveBeenCalled());
+      await Promise.resolve();
+      await Promise.resolve();
+      unsubscribe();
+
+      expect(mountedKeys).toEqual(['book-1-uid-1']);
+      uniqueIdMock.mockImplementation(() => 'mock-uid-123');
     });
   });
 });

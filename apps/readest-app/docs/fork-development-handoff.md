@@ -615,6 +615,76 @@ pnpm tauri android build -t aarch64 -- --features devtools
 
 2026-07-22 的生产化收敛进一步区分了认证请求签名和书籍文件头签名字节：`signature`、`xAmzSignature` 等认证字段仍会脱敏，`signatureHex` 可以正常导出。正式构建不启用 Tauri `devtools` feature；诊断能力本身不引入大型依赖或资源。
 
+### 3.7 第三大需求：受控同步上游
+
+开发分支：`codex/upstream-sync-20260729`
+
+本轮同步基线：
+
+- fork 起点：`master` 的 `7042e8b5`
+- 共同祖先：`c81547cd57a41a17688096338a27921e5690978d`
+- 上游目标：`readest/readest:main` / `origin/upstream` 的
+  `21e1ed5dfa7e9eaf7feb8fb1214df6251d96f27b`
+- 相对共同祖先，fork 有 36 个独有提交，上游有 127 个独有提交；双方共同修改 37 个
+  文件。
+
+真实 merge 共产生 21 个文本冲突，主要分为云同步与设置界面、会员/支付访问策略、
+依赖/锁文件三类。解决原则不是简单选择 ours/theirs，而是以上游新架构为基础，重新落实
+fork 已验收的产品行为：
+
+1. 接入上游多 provider 云同步：Readest Cloud、WebDAV、Google Drive、S3、OneDrive
+   可以独立选择并同时运行；第三方 provider 使用稳定顺序、逐后端故障隔离和逐后端缓存。
+2. 删除上游新架构带回的 `UserPlan`、套餐缓存、Premium badge 和同步暂停门槛。第三方
+   同步与离线 TTS 音频下载均不读取会员状态。
+3. 保留兼容旧设置的派生默认值：未出现 `readestCloud.enabled` 时，有第三方 provider
+   则沿用旧的第三方-only 行为；一旦用户明确选择，`Readest Cloud + S3` 等组合可以同时
+   生效。
+4. 多后端上传会镜像到所有启用 provider；下载和书籍打开失败自动恢复会按稳定顺序尝试
+   所有启用的第三方 provider。此前的 S3 文件完整性检查、自动恢复和诊断日志继续保留。
+5. S3 endpoint、region、bucket、Access Key 和 Secret Key 的设置副本加密/回填能力
+   保留；同时采用上游对连接元数据 push-hash 跟踪的改进，避免 WebDAV/S3 连接地址在
+   登录前配置后滞留在单一设备。
+6. Stripe、Apple/Google IAP 和支付实现继续保持删除；同步清理上游重新加入但已无调用
+   的 Stripe 与 Google Auth 支付依赖。
+7. 活动 GitHub Actions 仍只有 `fork-release.yml` 和 `fork-web-image.yml`。上游工作流
+   继续位于 `.github/upstream-workflows-disabled/`，没有恢复上游部署、R2、商店或发布
+   权限。
+8. 应用代码版本随本轮上游基线进入 `0.11.20`。这只表示候选代码版本；在跨平台候选和
+   真机验收完成前，不合并 `master`、不发布 `v0.11.20` Release。
+
+本轮新增 `.github/scripts/fork-invariants.test.mjs`，持续检查：
+
+- 活动工作流白名单；
+- 会员、Quota、支付和 IAP 路径保持删除；
+- 自建 Supabase、S3 自动恢复、诊断日志、设置副本和 fork updater 信任资产仍存在；
+- fork Release 只使用自有更新端点、公钥和签名密钥。
+
+截至 2026-07-29 的本地验证：
+
+- fork 不变量测试：20/20 通过。
+- 多 provider、设置状态、provider cache、同步编排、阅读器恢复、TTS 入口等定向
+  Vitest：112/112 通过。
+- TypeScript 与 Biome lint：通过，检查 1764 个文件。
+- Biome format check：通过，检查 1798 个文件。
+- 浏览器集成测试：27 个文件、321 条通过、1 条跳过。
+- 浏览器扩展测试：6 个文件、44 条通过；生产 webpack 构建通过。
+- 自建数据库 bootstrap/upgrade 生成测试均通过。
+- `BUILD_STANDALONE=true` 的 Next.js 16.2.11 Web/API 生产构建通过。
+- 全量 Vitest：603 个测试文件中 602 个通过；7916 条通过、1 条跳过、3 条失败。失败仍
+  只有既有的 Turso L2 浮点精度断言，数值与此前记录一致。
+- 本机当前环境没有 `cargo` 和 `luajit`，因此 Rust fmt/clippy/test 与 KOReader Lua
+  测试需由后续 GitHub Actions 跨平台候选构建补齐；不能把“工具未安装”写成测试通过。
+
+合并 `master` 前仍需完成：
+
+1. 提交并推送本开发分支，手动运行 `Fork Release Installers` 且
+   `publish_release=false`，验证 Android、Windows、Linux、macOS 候选包；开发分支的
+   Web/API 候选镜像不得更新 `master` / `latest` 标签。
+2. 至少在 Android 与 macOS 验证登录/会话、Readest-only、S3-only、Readest + S3、
+   跨设备书籍/进度/笔记/设置、删除本地副本后自动恢复和更新检查。
+3. 用户确认候选验收并明确授权后，才以普通 merge commit 合并到 `master`。由于版本
+   已从 `0.11.18` 变为 `0.11.20`，届时 master 流水线会创建新的正式 Release。
+
 ## 4. S3 跨设备“无法打开书籍”调查
 
 ### 4.1 用户现象

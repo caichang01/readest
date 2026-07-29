@@ -4,13 +4,14 @@ import {
   MdAlarm,
   MdArrowBackIosNew,
   MdCheck,
-  MdFastForward,
-  MdFastRewind,
+  MdKeyboardArrowLeft,
+  MdKeyboardArrowRight,
+  MdKeyboardDoubleArrowLeft,
+  MdKeyboardDoubleArrowRight,
   MdOutlinePause,
   MdPlayArrow,
-  MdSegment,
-  MdSkipNext,
-  MdSkipPrevious,
+  MdOutlineFileDownload,
+  MdChevronRight,
 } from 'react-icons/md';
 import { RiVoiceAiFill } from 'react-icons/ri';
 import { TTSVoicesGroup } from '@/services/tts';
@@ -29,15 +30,19 @@ import Dialog from '@/components/Dialog';
 import { TTSPlaybackInfo } from './usePlaybackInfo';
 import { useCountdownLabel } from './useCountdownLabel';
 import TTSScrubber from './TTSScrubber';
-import SpeedChips, { formatRate } from './SpeedChips';
-import GapChips, { formatGap } from './GapChips';
-import ParagraphGapChips from './ParagraphGapChips';
+import SpeedRuler, { formatRate } from './SpeedRuler';
+import TTSChaptersView from './TTSChaptersView';
+import { TTS_STOP_AT_CHAPTER_END } from '@/services/tts/TTSSessionManager';
+import type { UseTTSDownloadsResult } from '@/app/reader/hooks/useTTSDownloads';
 
-type SheetView = 'main' | 'speed' | 'voice' | 'timer' | 'paragraphGap';
+type SheetView = 'main' | 'speed' | 'voice' | 'timer' | 'chapters';
+
+export const formatGap = (sec: number) => `${parseFloat(sec.toFixed(2))}s`;
 
 const getTTSTimeoutOptions = (_: TranslationFunc) => {
   return [
     { label: _('No Timeout'), value: 0 },
+    { label: _('End of Chapter'), value: TTS_STOP_AT_CHAPTER_END },
     { label: _('{{value}} minute', { value: 1 }), value: 60 },
     { label: _('{{value}} minutes', { value: 3 }), value: 180 },
     { label: _('{{value}} minutes', { value: 5 }), value: 300 },
@@ -60,7 +65,6 @@ type TTSPlayerSheetProps = {
   ttsLang: string;
   isPlaying: boolean;
   hasTimeline: boolean;
-  hasGapControl: boolean;
   timeoutOption: number;
   timeoutTimestamp: number;
   chapterRemainingSec: number | null;
@@ -76,7 +80,10 @@ type TTSPlayerSheetProps = {
   onGetVoiceId: () => string;
   onSelectTimeout: (bookKey: string, value: number) => void;
   onSeek: (seconds: number) => Promise<void>;
+  onSeekPreview: (seconds: number) => void;
   onGetPlaybackInfo: () => TTSPlaybackInfo | null;
+  downloads: UseTTSDownloadsResult;
+  activeSectionIndex: number | null;
 };
 
 // Full player sheet: cover, chapter, scrubber, transport, and one compact
@@ -88,7 +95,6 @@ const TTSPlayerSheet = ({
   ttsLang,
   isPlaying,
   hasTimeline,
-  hasGapControl,
   timeoutOption,
   timeoutTimestamp,
   chapterRemainingSec,
@@ -104,7 +110,10 @@ const TTSPlayerSheet = ({
   onGetVoiceId,
   onSelectTimeout,
   onSeek,
+  onSeekPreview,
   onGetPlaybackInfo,
+  downloads,
+  activeSectionIndex,
 }: TTSPlayerSheetProps) => {
   const _ = useTranslation();
   const { envConfig } = useEnv();
@@ -116,14 +125,11 @@ const TTSPlayerSheet = ({
   const [view, setView] = useState<SheetView>('main');
   const [voiceGroups, setVoiceGroups] = useState<TTSVoicesGroup[]>([]);
   const [rate, setRate] = useState(viewSettings?.ttsRate ?? 1.0);
-  const [gap, setGap] = useState(viewSettings?.ttsSentenceGap ?? DEFAULT_SENTENCE_GAP_SEC);
-  const [paragraphGap, setParagraphGap] = useState(
-    viewSettings?.ttsParagraphGap ?? DEFAULT_PARAGRAPH_GAP_SEC,
-  );
   const [selectedVoice, setSelectedVoice] = useState('');
   const timerLabel = useCountdownLabel(timeoutTimestamp);
   const iconSize18 = useResponsiveSize(18);
   const iconSize24 = useResponsiveSize(24);
+  const iconSize28 = useResponsiveSize(28);
   const iconSize32 = useResponsiveSize(32);
 
   const book = getBookData(bookKey)?.book;
@@ -135,8 +141,6 @@ const TTSPlayerSheet = ({
     if (!isOpen) return;
     setView('main');
     setRate(getViewSettings(bookKey)?.ttsRate ?? 1.0);
-    setGap(getViewSettings(bookKey)?.ttsSentenceGap ?? DEFAULT_SENTENCE_GAP_SEC);
-    setParagraphGap(getViewSettings(bookKey)?.ttsParagraphGap ?? DEFAULT_PARAGRAPH_GAP_SEC);
     setSelectedVoice(onGetVoiceId());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
@@ -162,44 +166,32 @@ const TTSPlayerSheet = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, ttsLang]);
 
+  /* Scale a given `baseGap` based on a given `rate`. */
+  const scaleGap = (baseGap: number, rate: number) => {
+    const k = 0.6;
+    return Math.round(baseGap / Math.pow(rate, k));
+  };
+
   const handleSelectRate = (value: number) => {
     setRate(value);
     onSetRate(value);
+
+    const gap = scaleGap(DEFAULT_SENTENCE_GAP_SEC, value);
+    const paragraphGap = scaleGap(DEFAULT_PARAGRAPH_GAP_SEC, value);
+    onSetSentenceGap(gap);
+    onSetParagraphGap(paragraphGap);
+
     const vs = getViewSettings(bookKey)!;
     vs.ttsRate = value;
+    vs.ttsSentenceGap = gap;
+    vs.ttsParagraphGap = paragraphGap;
     setViewSettings(bookKey, vs);
     // Read the store fresh at call time: a `settings` captured at render goes
     // stale if anything else persisted settings since this sheet mounted.
     const { settings, setSettings, saveSettings } = useSettingsStore.getState();
     settings.globalViewSettings.ttsRate = value;
-    setSettings(settings);
-    saveSettings(envConfig, settings);
-  };
-
-  const handleSelectGap = (value: number) => {
-    setGap(value);
-    onSetSentenceGap(value);
-    const vs = getViewSettings(bookKey)!;
-    vs.ttsSentenceGap = value;
-    setViewSettings(bookKey, vs);
-    // Read the store fresh at call time: a `settings` captured at render goes
-    // stale if anything else persisted settings since this sheet mounted.
-    const { settings, setSettings, saveSettings } = useSettingsStore.getState();
-    settings.globalViewSettings.ttsSentenceGap = value;
-    setSettings(settings);
-    saveSettings(envConfig, settings);
-  };
-
-  const handleSelectParagraphGap = (value: number) => {
-    setParagraphGap(value);
-    onSetParagraphGap(value);
-    const vs = getViewSettings(bookKey)!;
-    vs.ttsParagraphGap = value;
-    setViewSettings(bookKey, vs);
-    // Read the store fresh at call time: a `settings` captured at render goes
-    // stale if anything else persisted settings since this sheet mounted.
-    const { settings, setSettings, saveSettings } = useSettingsStore.getState();
-    settings.globalViewSettings.ttsParagraphGap = value;
+    settings.globalViewSettings.ttsSentenceGap = gap;
+    settings.globalViewSettings.ttsParagraphGap = paragraphGap;
     setSettings(settings);
     saveSettings(envConfig, settings);
   };
@@ -218,19 +210,44 @@ const TTSPlayerSheet = ({
     setView('main');
   };
 
+  const handleOpenDownloads = () => {
+    setView('chapters');
+  };
+
   const timeoutOptions = getTTSTimeoutOptions(_);
   const currentVoiceName = voiceGroups
     .flatMap((group) => group.voices)
     .find((voice) => voice.id === selectedVoice)?.name;
-  // Armed timer shows its live countdown on the button; otherwise the button
-  // just names itself (the alarm icon already carries the affordance).
-  const timerCaption = timeoutOption > 0 && timerLabel ? timerLabel : _('Sleep Timer');
+  // Armed timer shows its live countdown on the button; the chapter-end mode
+  // has no countdown so it just names itself; otherwise the button falls
+  // back to naming the feature (the alarm icon already carries the
+  // affordance).
+  const timerCaption =
+    timeoutOption === TTS_STOP_AT_CHAPTER_END
+      ? _('End of Chapter')
+      : timeoutOption > 0 && timerLabel
+        ? timerLabel
+        : _('Sleep Timer');
 
   // The main view carries no header label (the content speaks for itself and
   // vertical space is tight); sub-views keep the back button and their title.
+  // Desktop hides the drag handle and has no swipe-to-dismiss, so the main
+  // view floats the standard dialog close pill over its top-right corner.
   const header =
     view === 'main' ? (
-      <div />
+      <button
+        type='button'
+        aria-label={_('Close')}
+        onClick={onClose}
+        className='bg-base-300/65 btn btn-ghost btn-circle absolute end-3 top-1 z-10 hidden h-6 min-h-6 w-6 focus:outline-none sm:flex'
+      >
+        <svg xmlns='http://www.w3.org/2000/svg' width='1em' height='1em' viewBox='0 0 24 24'>
+          <path
+            fill='currentColor'
+            d='M19 6.41L17.59 5L12 10.59L6.41 5L5 6.41L10.59 12L5 17.59L6.41 19L12 13.41L17.59 19L19 17.59L13.41 12z'
+          />
+        </svg>
+      </button>
     ) : (
       <div className='relative flex h-11 w-full items-center px-1'>
         <button
@@ -247,8 +264,8 @@ const TTSPlayerSheet = ({
               ? _('Speed')
               : view === 'voice'
                 ? _('Select Voice')
-                : view === 'paragraphGap'
-                  ? _('Paragraph Gap')
+                : view === 'chapters'
+                  ? _('Offline Audio')
                   : _('Set Timeout')}
           </span>
         </div>
@@ -267,7 +284,10 @@ const TTSPlayerSheet = ({
       onClose={onClose}
     >
       {view === 'main' && (
-        <div className='flex w-full flex-col items-center gap-4 pb-4'>
+        // sm:pt-4 keeps the cover clear of the box's rounded top edge on
+        // desktop, where the mobile drag handle (and its clearance) is
+        // hidden; on mobile the handle already provides the gap.
+        <div className='flex w-full flex-col items-center gap-4 pb-4 sm:pt-4'>
           {book?.coverImageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -287,6 +307,7 @@ const TTSPlayerSheet = ({
               bookKey={bookKey}
               isEink={isEink}
               onSeek={onSeek}
+              onSeekPreview={onSeekPreview}
               onGetPlaybackInfo={onGetPlaybackInfo}
             />
           ) : (
@@ -304,7 +325,7 @@ const TTSPlayerSheet = ({
               aria-label={_('Previous Paragraph')}
               onClick={() => onBackward(false)}
             >
-              <MdFastRewind size={iconSize24} />
+              <MdKeyboardDoubleArrowLeft size={iconSize24} />
             </button>
             <button
               type='button'
@@ -313,7 +334,7 @@ const TTSPlayerSheet = ({
               aria-label={_('Previous Sentence')}
               onClick={() => onBackward(true)}
             >
-              <MdSkipPrevious size={iconSize32} />
+              <MdKeyboardArrowLeft size={iconSize28} />
             </button>
             <button
               type='button'
@@ -330,7 +351,7 @@ const TTSPlayerSheet = ({
               aria-label={_('Next Sentence')}
               onClick={() => onForward(true)}
             >
-              <MdSkipNext size={iconSize32} />
+              <MdKeyboardArrowRight size={iconSize28} />
             </button>
             <button
               type='button'
@@ -339,7 +360,7 @@ const TTSPlayerSheet = ({
               aria-label={_('Next Paragraph')}
               onClick={() => onForward(false)}
             >
-              <MdFastForward size={iconSize24} />
+              <MdKeyboardDoubleArrowRight size={iconSize24} />
             </button>
           </div>
           <div className='flex w-full gap-2'>
@@ -350,7 +371,9 @@ const TTSPlayerSheet = ({
               className='not-eink:bg-base-200 eink-bordered flex h-14 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl'
             >
               <span className='text-sm font-semibold tabular-nums'>{formatRate(rate)}</span>
-              <span className='text-base-content/60 text-xs'>{_('Speed')}</span>
+              <span className='text-base-content/60 max-w-full truncate px-1 text-xs'>
+                {_('Speed')}
+              </span>
             </button>
             <button
               type='button'
@@ -374,36 +397,40 @@ const TTSPlayerSheet = ({
                 {timerCaption}
               </span>
             </button>
+          </div>
+          {downloads.supported && downloads.chapters.length > 0 && (
             <button
               type='button'
-              aria-label={_('Paragraph Gap')}
-              onClick={() => setView('paragraphGap')}
-              className='not-eink:bg-base-200 eink-bordered flex h-14 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl'
+              aria-label={_('Offline Audio')}
+              onClick={handleOpenDownloads}
+              className='not-eink:bg-base-200 eink-bordered flex w-full items-center gap-3 rounded-xl px-3 py-2.5'
             >
-              <MdSegment size={iconSize18} />
-              <span className='text-base-content/60 max-w-full truncate px-1 text-xs tabular-nums'>
-                {formatGap(paragraphGap)}
-              </span>
-            </button>
-          </div>
-        </div>
-      )}
-      {view === 'speed' && (
-        <div className='flex w-full flex-col items-center pb-4 pt-2'>
-          <SpeedChips rate={rate} onSelect={handleSelectRate} />
-          {hasGapControl && (
-            <>
-              <div className='text-base-content/60 w-full px-2 py-1 text-sm sm:text-xs'>
-                {_('Sentence Pause')} · {formatGap(gap)}
+              <MdOutlineFileDownload size={iconSize24} className='shrink-0' />
+              <div className='flex min-w-0 flex-1 flex-col items-start'>
+                <span className='text-sm font-semibold'>{_('Offline Audio')}</span>
+                <span className='text-base-content/60 line-clamp-1 text-start text-xs'>
+                  {_('{{done}} of {{total}} downloaded', {
+                    done: downloads.chapters.filter((c) => downloads.statusOf(c) === 'complete')
+                      .length,
+                    total: downloads.chapters.length,
+                  })}
+                </span>
               </div>
-              <GapChips gap={gap} onSelect={handleSelectGap} />
-            </>
+              <MdChevronRight size={iconSize24} className='shrink-0 rtl:rotate-180' />
+            </button>
           )}
         </div>
       )}
-      {view === 'paragraphGap' && (
+      {view === 'chapters' && (
+        <TTSChaptersView
+          downloads={downloads}
+          activeSectionIndex={activeSectionIndex}
+          isEink={isEink}
+        />
+      )}
+      {view === 'speed' && (
         <div className='flex w-full flex-col items-center pb-4 pt-2'>
-          <ParagraphGapChips gap={paragraphGap} onSelect={handleSelectParagraphGap} />
+          <SpeedRuler rate={rate} onSelect={handleSelectRate} />
         </div>
       )}
       {view === 'voice' && (

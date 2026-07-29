@@ -54,18 +54,19 @@ import {
   handleMousemove,
   handleAuxclick,
   handleClick,
+  handleClickCapture,
   handleWheel,
   handleTouchStart,
   handleTouchMove,
   handleTouchEnd,
-  addLongPressListeners,
+  handleTouchCancel,
 } from '../utils/iframeEventHandlers';
 import { getMaxInlineSize } from '@/utils/config';
 import { getDirFromUILanguage } from '@/utils/rtl';
 import { isTauriAppPlatform } from '@/services/environment';
 import { TransformContext } from '@/services/transformers/types';
 import { transformContent } from '@/services/transformService';
-import { lockScreenOrientation } from '@/utils/bridge';
+import { lockScreenOrientation, setTextSelectionSuppressed } from '@/utils/bridge';
 import { useTextTranslation } from '../hooks/useTextTranslation';
 import { useBookCoverAutoSave } from '../hooks/useAutoSaveBookCover';
 import { useDiscordPresence } from '@/hooks/useDiscordPresence';
@@ -81,14 +82,19 @@ import { isFontType } from '@/utils/font';
 import { getScrollGapAttr } from '@/utils/webtoon';
 import { useMiddleClickAutoscroll } from '../hooks/useMiddleClickAutoscroll';
 import { useAutoScroll } from '../hooks/useAutoScroll';
+import { useAutoScrollSpeedGesture } from '../hooks/useAutoScrollSpeedGesture';
 import { ParagraphControl } from './paragraph';
 import AutoscrollIndicator from './AutoscrollIndicator';
 import AutoScrollControl from './AutoScrollControl';
+import AutoScrollSpeedOverlay from './AutoScrollSpeedOverlay';
 import Spinner from '@/components/Spinner';
 import KOSyncConflictResolver from './KOSyncResolver';
 import ImageViewer from './ImageViewer';
 import TableViewer from './TableViewer';
-import { TTS_MINI_PLAYER_CLEARANCE } from './tts/TTSMiniPlayer';
+import {
+  getTTSMiniPlayerBottomOffset,
+  TTS_MINI_PLAYER_HEIGHT,
+} from '../utils/ttsMiniPlayerPosition';
 
 declare global {
   interface Window {
@@ -140,6 +146,10 @@ const FoliateViewer: React.FC<{
   const navSpinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scrollMargins, setScrollMargins] = useState({ top: 0, bottom: 0 });
   const docLoaded = useRef(false);
+
+  const autoScroll = useAutoScroll(bookKey, viewRef);
+  const { registerSpeedListeners, overlayVisible: speedOverlayVisible } =
+    useAutoScrollSpeedGesture(autoScroll);
 
   // A pending anti-flash timer must not fire setNavigating on an unmounted component.
   useEffect(() => {
@@ -418,16 +428,24 @@ const FoliateViewer: React.FC<{
         detail.doc.addEventListener('mouseup', handleMouseup.bind(null, bookKey));
         detail.doc.addEventListener('mousemove', handleMousemove.bind(null, bookKey));
         detail.doc.addEventListener('auxclick', handleAuxclick.bind(null, bookKey));
+        detail.doc.addEventListener('click', handleClickCapture.bind(null, bookKey), {
+          capture: true,
+        });
         detail.doc.addEventListener(
           'click',
           handleClick.bind(null, bookKey, doubleClickDisabled, !!bookData?.isFixedLayout),
         );
         detail.doc.addEventListener('wheel', handleWheel.bind(null, bookKey));
         detail.doc.addEventListener('touchstart', handleTouchStart.bind(null, bookKey));
-        detail.doc.addEventListener('touchmove', handleTouchMove.bind(null, bookKey));
-        detail.doc.addEventListener('touchend', handleTouchEnd.bind(null, bookKey));
-        addLongPressListeners(bookKey, detail.doc);
+        detail.doc.addEventListener('touchmove', handleTouchMove.bind(null, bookKey), {
+          passive: false,
+        });
+        detail.doc.addEventListener('touchend', handleTouchEnd.bind(null, bookKey), {
+          passive: false,
+        });
+        detail.doc.addEventListener('touchcancel', handleTouchCancel.bind(null, bookKey));
         registerBrightnessListeners(detail.doc);
+        registerSpeedListeners(detail.doc);
       }
     }
   };
@@ -543,7 +561,6 @@ const FoliateViewer: React.FC<{
   const mouseHandlers = useMouseEvent(bookKey, handlePageFlip);
   const touchHandlers = useTouchEvent(bookKey);
   const autoscrollAnchor = useMiddleClickAutoscroll(bookKey, viewRef, containerRef);
-  const autoScroll = useAutoScroll(bookKey, viewRef);
 
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedTableHtml, setSelectedTableHtml] = useState<string | null>(null);
@@ -824,8 +841,13 @@ const FoliateViewer: React.FC<{
     // full-width blank bar that steals space from the book text.
     const showBottomFooter = footerReservesBand(viewSettings) && !viewSettings.vertical;
     const moreTopInset = showTopHeader ? Math.max(0, 16 - insets.top) : 0;
+    // Resting position (bottom bar dismissed): the card stacks above the
+    // footer band, so the reserved clearance is its bottom offset plus the
+    // card height.
     const miniPlayerClearance = viewState?.ttsEnabled
-      ? TTS_MINI_PLAYER_CLEARANCE + gridInsets.bottom * 0.33
+      ? getTTSMiniPlayerBottomOffset(viewSettings) +
+        TTS_MINI_PLAYER_HEIGHT +
+        gridInsets.bottom * 0.33
       : 0;
     const moreBottomInset = showBottomFooter
       ? Math.max(0, Math.max(miniPlayerClearance, 16) - insets.bottom)
@@ -864,6 +886,29 @@ const FoliateViewer: React.FC<{
       }
     }
   };
+
+  // iOS: the system long-press selection would race the instant-highlight
+  // hold — WebKit consults selectability before any touch handler runs, so
+  // JS-level suppression cannot win. Suppress it natively while the highlight
+  // quick action owns the gesture; restore when the mode turns off or the
+  // reader closes.
+  useEffect(() => {
+    if (!appService?.isIOSApp) return;
+    const suppressed =
+      !!viewSettings?.enableAnnotationQuickActions &&
+      viewSettings?.annotationQuickAction === 'highlight';
+    setTextSelectionSuppressed({ suppressed }).catch(() => {});
+    return () => {
+      if (suppressed) {
+        setTextSelectionSuppressed({ suppressed: false }).catch(() => {});
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    appService?.isIOSApp,
+    viewSettings?.enableAnnotationQuickActions,
+    viewSettings?.annotationQuickAction,
+  ]);
 
   useEffect(() => {
     if (viewRef.current && viewRef.current.renderer) {
@@ -1022,6 +1067,9 @@ const FoliateViewer: React.FC<{
         />
       )}
       <BrightnessOverlay visible={overlayVisible} level={overlayLevel} />
+      {autoScroll.active && (
+        <AutoScrollSpeedOverlay visible={speedOverlayVisible} speed={autoScroll.speed} />
+      )}
       <ParagraphControl bookKey={bookKey} viewRef={viewRef} gridInsets={gridInsets} />
       {((!docLoaded.current && loading) || navigating || viewState?.loading) && (
         <div className='absolute left-0 top-0 z-10 flex h-full w-full items-center justify-center'>

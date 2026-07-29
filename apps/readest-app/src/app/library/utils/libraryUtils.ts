@@ -4,9 +4,10 @@ import {
   LibrarySecondarySortByType,
   LibrarySortByType,
 } from '@/types/settings';
-import { formatAuthors, formatTitle } from '@/utils/book';
+import { formatAuthors, formatTitle, isCurrentlyReadingBook } from '@/utils/book';
 import { md5Fingerprint } from '@/utils/md5';
 import { SIZE_PER_LOC, SIZE_PER_TIME_UNIT } from '@/services/constants';
+import { isFeedBook } from '@/services/rss/feedBookUrl';
 
 /** Valid sort types for the library */
 const VALID_SORT_TYPES: LibrarySortByType[] = Object.values(LibrarySortByType);
@@ -199,9 +200,24 @@ const getBookReadRatio = (book: Book): number => {
   return current / total;
 };
 
-export const getTimeRemainingMinutes = (book: Book): number | undefined => {
+export const getTimeRemainingMinutes = (
+  book: Book,
+  medianPageDurationSecs?: number,
+): number | undefined => {
   const pagesLeft = book.progress ? book.progress[1] - book.progress[0] : undefined;
-  return pagesLeft ? Math.round((pagesLeft * SIZE_PER_LOC) / SIZE_PER_TIME_UNIT) : undefined;
+  if (!pagesLeft) return undefined;
+  return convertPagesToTimeRemainingMinutes(pagesLeft, medianPageDurationSecs);
+};
+
+export const convertPagesToTimeRemainingMinutes = (
+  pagesLeft: number,
+  medianPageDurationSecs?: number,
+): number => {
+  // Prefer the reader's own pace; fall back to the coarse global estimate.
+  const minutesPerPage = medianPageDurationSecs
+    ? medianPageDurationSecs / 60
+    : SIZE_PER_LOC / SIZE_PER_TIME_UNIT;
+  return Math.max(1, Math.round(pagesLeft * minutesPerPage));
 };
 
 /**
@@ -210,12 +226,15 @@ export const getTimeRemainingMinutes = (book: Book): number | undefined => {
  * `ReadingProgress`), even when they still have pages left — so they have no time
  * to sort by. Sorting and the label must agree on this, hence the shared helper.
  */
-export const getDisplayedTimeRemaining = (book: Book): number | undefined => {
+export const getDisplayedTimeRemaining = (
+  book: Book,
+  medianPageDurationSecs?: number,
+): number | undefined => {
   const { readingStatus } = book;
   if (readingStatus === 'finished' || readingStatus === 'abandoned' || readingStatus === 'unread') {
     return undefined;
   }
-  return getTimeRemainingMinutes(book);
+  return getTimeRemainingMinutes(book, medianPageDurationSecs);
 };
 
 /**
@@ -324,23 +343,18 @@ export const createBookSorter =
   };
 
 /**
- * A book counts as "read" once it has reading progress. Importing a book sets
- * timestamps but never `progress`; only opening it does. Gating on this keeps
- * freshly-added-but-unopened books off the shelf.
- */
-const hasBeenRead = (book: Book): boolean => book.progress != null;
-
-/**
  * Pick the books for the recently-read shelf: most-recently-read first, capped
- * at `count`. Recency uses `updatedAt` (the library's "Updated" sort key) so the
- * row matches the app's existing sort convention. NB: `updatedAt` is last-modified
- * (also bumped by status/metadata edits and sync), not strictly last-read.
- * Independent of the main shelf's sort/grouping — always a flat, recency slice.
+ * at `count`. Only currently-reading books qualify (see `isCurrentlyReadingBook`):
+ * finished, abandoned and freshly-imported books are left off. Recency uses
+ * `updatedAt` (the library's "Updated" sort key) so the row matches the app's
+ * existing sort convention. NB: `updatedAt` is last-modified (also bumped by
+ * status/metadata edits and sync), not strictly last-read. Independent of the
+ * main shelf's sort/grouping — always a flat, recency slice.
  */
 export const selectRecentShelfBooks = (books: Book[], count: number): Book[] => {
   const byRecency = createBookSorter(LibrarySortByType.Updated, '');
   return books
-    .filter((book) => !book.deletedAt && hasBeenRead(book))
+    .filter(isCurrentlyReadingBook)
     .sort((a, b) => -byRecency(a, b))
     .slice(0, count);
 };
@@ -814,11 +828,15 @@ export const getBookContextMenuItemIds = (book: Book): BookContextMenuItemId[] =
     ids.push('clearStatus');
   }
   ids.push('showDetails', 'showInFinder', 'searchGoodreads');
-  if (book.uploadedAt && !book.downloadedAt) ids.push('download');
-  if (!book.uploadedAt && book.downloadedAt) ids.push('upload');
-  // Share is offered for any local-or-uploaded book; the dialog uploads first
-  // if the book hasn't been pushed yet.
-  if (book.downloadedAt || book.uploadedAt) ids.push('share');
+  // A feed book has no file to move: every transfer action would fail, and the
+  // share dialog uploads before it can hand out a link (issue #5307).
+  if (!isFeedBook(book)) {
+    if (book.uploadedAt && !book.downloadedAt) ids.push('download');
+    if (!book.uploadedAt && book.downloadedAt) ids.push('upload');
+    // Share is offered for any local-or-uploaded book; the dialog uploads first
+    // if the book hasn't been pushed yet.
+    if (book.downloadedAt || book.uploadedAt) ids.push('share');
+  }
   ids.push('delete');
   return ids;
 };

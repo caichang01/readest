@@ -110,6 +110,7 @@ describe('EdgeTTSClient Web Audio playback', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -334,12 +335,25 @@ describe('EdgeTTSClient Web Audio playback', () => {
     expect(codes).not.toContain('boundary');
   });
 
-  test('a hard fetch error yields error and terminates', async () => {
+  test('a sustained run of hard fetch errors terminates the session (bounded skip)', async () => {
+    // A non-permanent (network) error skips the sentence so cached neighbours
+    // can still play — a cached chapter whose heading is uncached must not stop
+    // on the heading. But a RUN of consecutive unreachable sentences, with no
+    // cached hit to reset the budget, stops instead of skipping to the end of
+    // the book. Enough failing marks to exceed the budget, so the session ends
+    // with 'error' rather than wedging in 'playing'.
+    parsedMarks = Array.from({ length: 6 }, (_, i) => ({
+      name: String(i),
+      text: `Sentence ${i}.`,
+      language: 'en',
+    }));
     createAudioDataBehavior = async () => {
       throw new Error('network exploded');
     };
     const client = await startClient();
+    vi.useFakeTimers();
     const { events, done } = collectSpeak(client, new AbortController().signal);
+    await vi.runAllTimersAsync();
     await done;
     expect(events.at(-1)).toMatchObject({ code: 'error', message: 'network exploded' });
   }, 10000);

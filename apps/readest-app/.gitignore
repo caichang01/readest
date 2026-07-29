@@ -60,6 +60,9 @@ next-env.d.ts
 src-tauri/gen
 src-tauri/fork-ci-tauri-config.generated.json
 
+# local dev overrides (personal signing, etc.)
+src-tauri/tauri.*.local.json
+
 # vendor
 /public/vendor
 
