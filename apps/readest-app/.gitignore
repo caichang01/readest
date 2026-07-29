@@ -58,6 +58,7 @@ next-env.d.ts
 
 #generated
 src-tauri/gen
+src-tauri/fork-ci-tauri-config.generated.json
 
 # vendor
 /public/vendor

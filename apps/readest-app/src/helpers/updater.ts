@@ -47,6 +47,29 @@ export interface UpdateManifest {
   notes?: string;
   platforms: Record<string, UpdateManifestEntry>;
 }
+
+export const getSignedManifestEntry = (
+  manifest: Pick<UpdateManifest, 'platforms'>,
+  platformKey: string,
+): Required<UpdateManifestEntry> | null => {
+  const entry = manifest.platforms?.[platformKey];
+  if (!entry?.url || !entry.signature) return null;
+  return { url: entry.url, signature: entry.signature };
+};
+
+export const assertDownloadedUpdateSignature = async (
+  path: string,
+  entry: UpdateManifestEntry,
+  pubKey: string,
+  verify: (path: string, signature: string, pubKey: string) => Promise<boolean>,
+): Promise<void> => {
+  if (!entry.signature) {
+    throw new Error('Update signature is missing');
+  }
+  if (!(await verify(path, entry.signature, pubKey))) {
+    throw new Error('Signature verification failed');
+  }
+};
 export interface ResolvedNightlyUpdate {
   endpoint: string; // manifest URL (for the Tauri UpdaterBuilder path)
   version: string;
@@ -115,8 +138,8 @@ export const resolveNightlyUpdate = async (
   const candidates: ResolvedNightlyUpdate[] = [];
   for (const [manifest, endpoint] of sources) {
     if (!manifest?.version) continue;
-    const entry = manifest.platforms?.[platformKey];
-    if (!entry?.url || !entry?.signature) continue; // platform-eligibility filter
+    const entry = getSignedManifestEntry(manifest, platformKey);
+    if (!entry) continue; // platform-eligibility filter
     if (!isUpdateNewer(manifest.version, currentVersion)) continue;
     candidates.push({
       endpoint,
@@ -181,13 +204,13 @@ export const checkForAppUpdates = async (
         const response = await fetch(READEST_UPDATER_FILE, { connectTimeout: 5000 });
         const data = await response.json();
         const isNewer = semver.gt(data.version, getAppVersion());
-        if (
-          isNewer &&
-          ('android-arm64' in data.platforms || 'android-universal' in data.platforms)
-        ) {
+        const hasSignedAndroidArtifact = ['android-arm64', 'android-universal'].some(
+          (platformKey) => getSignedManifestEntry(data, platformKey) !== null,
+        );
+        if (isNewer && hasSignedAndroidArtifact) {
           setUpdaterWindowVisible(true, data.version!, getAppVersion());
         }
-        return isNewer;
+        return isNewer && hasSignedAndroidArtifact;
       } catch (err) {
         console.warn('Failed to fetch Android update info', err);
         throw new Error('Failed to fetch Android update info');

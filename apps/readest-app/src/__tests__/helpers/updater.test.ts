@@ -61,8 +61,10 @@ vi.mock('@/services/constants', () => ({
 }));
 
 import {
+  assertDownloadedUpdateSignature,
   checkForAppUpdates,
   checkAppReleaseNotes,
+  getSignedManifestEntry,
   setLastShownReleaseNotesVersion,
   getLastShownReleaseNotesVersion,
   resolveNightlyUpdate,
@@ -200,7 +202,7 @@ describe('updater', () => {
         json: () =>
           Promise.resolve({
             version: '2.0.0',
-            platforms: { 'android-arm64': {} },
+            platforms: { 'android-arm64': { url: 'https://x/app.apk', signature: 'sig' } },
           }),
       });
 
@@ -218,7 +220,7 @@ describe('updater', () => {
         json: () =>
           Promise.resolve({
             version: '2.0.0',
-            platforms: { 'android-universal': {} },
+            platforms: { 'android-universal': { url: 'https://x/app.apk', signature: 'sig' } },
           }),
       });
 
@@ -226,6 +228,23 @@ describe('updater', () => {
 
       expect(result).toBe(true);
       expect(mockSetUpdaterWindowVisible).toHaveBeenCalled();
+    });
+
+    test('Android ignores a newer manifest entry without URL or signature', async () => {
+      mockOsType.mockReturnValue('android');
+      mockAppVersion = '1.0.0';
+      mockTauriFetch.mockResolvedValue({
+        json: () =>
+          Promise.resolve({
+            version: '2.0.0',
+            platforms: { 'android-arm64': { url: 'https://x/app.apk' } },
+          }),
+      });
+
+      const result = await checkForAppUpdates(dummyTranslate, false);
+
+      expect(result).toBe(false);
+      expect(mockSetUpdaterWindowVisible).not.toHaveBeenCalled();
     });
 
     test('Android returns false when version is not newer', async () => {
@@ -425,6 +444,64 @@ describe('updater', () => {
     test('equal versions return false', () => {
       expect(semver.gt('1.0.0', '1.0.0')).toBe(false);
     });
+  });
+});
+
+describe('signed stable updates', () => {
+  const manifest = {
+    version: '2.0.0',
+    platforms: {
+      'android-arm64': { url: 'https://x/app.apk', signature: 'signature' },
+    },
+  };
+
+  test('returns only a complete signed manifest entry', () => {
+    expect(getSignedManifestEntry(manifest, 'android-arm64')).toEqual({
+      url: 'https://x/app.apk',
+      signature: 'signature',
+    });
+    expect(getSignedManifestEntry(manifest, 'android-universal')).toBeNull();
+    expect(
+      getSignedManifestEntry(
+        {
+          platforms: { 'android-arm64': { url: 'https://x/app.apk' } },
+        },
+        'android-arm64',
+      ),
+    ).toBeNull();
+  });
+
+  test('accepts a downloaded artifact only when minisign verification succeeds', async () => {
+    const verify = vi.fn().mockResolvedValue(true);
+    await expect(
+      assertDownloadedUpdateSignature(
+        '/tmp/readest.apk',
+        { url: 'https://x/app.apk', signature: 'signature' },
+        'public-key',
+        verify,
+      ),
+    ).resolves.toBeUndefined();
+    expect(verify).toHaveBeenCalledWith('/tmp/readest.apk', 'signature', 'public-key');
+  });
+
+  test('fails closed when a signature is absent or verification fails', async () => {
+    const verify = vi.fn().mockResolvedValue(false);
+    await expect(
+      assertDownloadedUpdateSignature(
+        '/tmp/readest.apk',
+        { url: 'https://x/app.apk', signature: 'signature' },
+        'public-key',
+        verify,
+      ),
+    ).rejects.toThrow('Signature verification failed');
+    await expect(
+      assertDownloadedUpdateSignature(
+        '/tmp/readest.apk',
+        { url: 'https://x/app.apk' },
+        'public-key',
+        verify,
+      ),
+    ).rejects.toThrow('missing');
   });
 });
 

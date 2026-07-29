@@ -8,9 +8,9 @@
 
 当前 Git 状态（截至最后更新）：
 
-- `master` 已合并生产化诊断功能和经过真机验收的 S3 书籍恢复修复。
-- 自建 Supabase 登录与数据库接入位于 `codex/self-hosted-supabase-auth`；Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署和登录验收已经完成。长期 Android 签名、跨平台候选构建、原生端登录、会话恢复和跨设备同步也已通过验收，等待连同后续 S3 设置修复取得明确合并授权。
-- Android 与 macOS 候选包的登录、重启恢复、登出，以及跨设备书籍和进度同步已经通过真机验证。S3 设置副本缺失字段的正式修复位于 `codex/fix-settings-replica-backfill`，核心提交为 `7d1a1675 fix: backfill missing replica settings`；新候选包真机验收也已通过，等待明确授权后合并。
+- `master` 已合并生产化诊断、S3 书籍恢复、自建 Supabase 登录/数据库接入和 S3 设置副本缺失字段修复；第一大需求的合并提交为 `3c74c661 merge: complete self-hosted Supabase integration`。
+- 自建 Supabase 的 Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署、长期 Android 签名、跨平台候选构建、原生端登录、会话恢复和跨设备同步均已完成验收。
+- 第二大需求“自有更新检查与发布链”从 `master` 建立独立分支 `codex/self-hosted-updater` 开发；已完成构建配置注入和跨平台清单映射的首组测试驱动实现，尚未接入正式流水线。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -338,8 +338,18 @@
 - 用户确认本次正式修复候选版本测试验证通过。
 - 设置副本缺失字段回填与跨设备 S3 配置恢复符合预期，未报告书籍、进度或原有 S3
   文件同步回归。
-- 本分支已经满足进入合并审核的测试条件；仍须取得明确授权后才能合并到 `master`，
-  不因验收通过自动发布 Release。
+- 用户明确授权后，`codex/fix-settings-replica-backfill` 连同它所基于的自建 Supabase
+  改造通过 `3c74c661 merge: complete self-hosted Supabase integration` 合并到
+  `master` 并推送远端。
+- 本次合并未改变应用版本号，因此正式流水线只生成验证 artifacts，不创建重复 Release。
+- 合并提交触发的 `Fork Web and API Image`（Actions run `30334843862`）成功，发布
+  `master`、`latest` 和不可变 SHA 标签的 Linux x64 GHCR 镜像。
+- `Fork Release Installers`（Actions run `30334843848`）成功；Android、macOS
+  Universal、Windows x64/ARM64、Linux x64/ARM64 全部完成构建和 artifact 上传，
+  Android 同时通过长期签名、apksigner 与 zipalign 验证。`Publish GitHub Release`
+  因版本号未变化按预期跳过。
+- 第一大需求“自建 Supabase 登录系统”至此完成代码合并、远端推送和正式流水线验证；
+  目标环境更新 `master/latest` 镜像后的冒烟测试属于部署收尾与持续运维。
 
 ### 3.4 fork 专用 GitHub Actions
 
@@ -382,6 +392,113 @@ Android 正式可更新签名依赖仓库 Secrets：
 - `ANDROID_KEY_PASSWORD`
 
 未配置时，CI 会生成临时证书；这种 APK 不同运行之间签名不同，无法覆盖升级。因此，面向长期真机使用或 GitHub Release 时必须配置稳定签名密钥并做好离线备份。
+
+### 3.4.1 自有更新检查与发布链
+
+开发分支：`codex/self-hosted-updater`
+
+开始开发时的现状：
+
+- 稳定版更新清单和发行说明仍固定指向 `download.readest.com`，Tauri 桌面更新器还保留
+  上游 GitHub Release 作为备用端点。
+- 客户端内嵌的 minisign 公钥仍属于上游 Readest，不能验证本 fork 自己签发的更新。
+- fork 流水线通过 `fork-ci-tauri-config.json` 设置
+  `createUpdaterArtifacts=false`，只生成可安装包，不生成 Tauri 更新归档和 `.sig`。
+- 当前 Release 作业只上传 APK、NSIS、AppImage、deb、dmg 和校验和，不生成或发布本
+  fork 的 `latest.json`。
+- Android 使用稳定 APK 签名密钥解决系统层覆盖安装，但 APK 签名与 Tauri/minisign
+  更新清单签名是两条不同的信任链，不能互相替代。
+
+目标设计：
+
+1. 版本清单基础 URL 和公开验证密钥通过 fork 构建配置注入；仓库和日志不得包含更新器
+   私钥或密码。
+2. 使用 fork 独有的长期 Tauri/minisign 密钥为桌面更新归档、Android APK 和需要应用
+   内替换的 AppImage 签名。
+3. 版本变化时由 GitHub Actions 汇总各平台已签名产物，原子生成单一 `latest.json`，
+   并与安装包一起发布到本 fork 的 GitHub Release。
+4. 客户端稳定版更新只信任 fork 的端点和公钥，不再回退到上游更新服务；自定义域名可
+   通过 HTTPS 反向代理或静态镜像同一份 Release 资产，而不改变签名内容。
+5. macOS/Windows 安装版继续使用 Tauri updater；Linux AppImage 与 Android 使用现有
+   自定义下载路径，但必须在安装前验证清单中的 minisign 签名。deb/rpm/Flatpak 不显示
+   无法兑现的应用内更新操作。
+6. 保持“版本号发生变化才创建 Release”的既有规则；普通 `master` 推送仍可构建候选
+   artifacts，但不能改写稳定更新清单。
+
+实施顺序：
+
+1. 先为构建配置校验、平台清单映射和缺失签名拒绝行为编写失败测试。
+2. 实现可配置端点与 Tauri overlay，并恢复签名更新产物。
+3. 实现清单汇总、Release 上传和客户端签名校验。
+4. 完成本地单元测试、lint、Rust 检查和候选 Actions 构建后，再进行旧版本到新版本的
+   真机更新测试。
+
+2026-07-28 第一阶段进展：
+
+- 扩展 fork 原生环境生成器，要求提供 updater 的 HTTPS 基础 URL 和 Base64 编码
+  minisign 公钥；旧的上游 updater 变量会从生成结果中移除，缺失、占位符、多行或
+  不安全输入会在构建前失败。
+- 同一生成器可以生成 `createUpdaterArtifacts=true` 的 Tauri overlay；overlay 只包含
+  fork 的单一 `latest.json` 端点和对应公钥，不保留上游备用端点。
+- 新增纯函数清单生成器，覆盖 Android universal/ARM64、Windows x64/ARM64、macOS
+  Universal 和 Linux AppImage x64/ARM64；任何必需平台缺失、重复或没有 `.sig` 都会
+  阻止发布。
+- 测试严格按照红灯到绿灯执行：环境与 overlay 5 条、清单映射 3 条均通过；连同既有
+  Release 元数据测试，全部 GitHub 脚本测试共 12 条通过。
+- 第一阶段提交为 `0e209424 feat: prepare fork updater trust chain`；分支推送触发的
+  `Fork Web and API Image`（Actions run `30337935839`）成功完成并发布不可变 SHA
+  候选镜像。
+- 尚未把新配置和清单生成器接入 `fork-release.yml`，也没有改变客户端端点、生成签名
+  产物或发布 `latest.json`。在配置长期 Tauri 私钥前，不运行会发布更新的候选流程。
+
+2026-07-28 第二阶段进展：
+
+- GitHub 仓库已配置长期 updater 签名 Secret
+  `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，以及公开构建变量
+  `NEXT_PUBLIC_UPDATER_BASE_URL`、`NEXT_PUBLIC_UPDATER_PUBKEY`；只核对了配置名称，
+  没有读取或输出 Secret 内容。
+- `Fork Release Installers` 会把 fork 更新端点和公钥写入原生应用环境，并在桌面构建时
+  生成一次性 `fork-ci-tauri-config.generated.json`。该 overlay 开启 updater artifacts，
+  只保留 fork 的一个 `latest.json` 端点；旧的静态禁用配置已删除，生成文件被
+  `.gitignore` 排除。
+- Android APK 在系统 APK 签名和对齐校验后，再用长期 Tauri/minisign 密钥生成相邻
+  `.sig`；Windows NSIS、macOS `.app.tar.gz` 和 Linux AppImage 由 Tauri 构建器生成
+  updater 签名。Release 汇总阶段要求恰好取得 7 份签名，缺失任何平台都会失败。
+- Release 作业会收集各平台签名产物，生成带精确版本 Tag 下载 URL 的 `latest.json`，
+  同时发布 `release-notes.json` 和 `SHA256SUMS`。清单覆盖 Android universal/ARM64、
+  Windows NSIS x64/ARM64、macOS Universal 双架构键和 Linux AppImage x64/ARM64。
+- 稳定版客户端的清单、发行说明和公开验证密钥改为由 fork 构建变量注入；fork CI 缺失
+  配置会在编译前失败。Android、Linux AppImage 及既有 Windows portable 自定义下载
+  路径均先验证 minisign 签名，验签失败会中止安装；macOS 和 Windows NSIS 继续由
+  Tauri updater 完成验签和安装。
+- 新增工作流契约与签名资产收集测试。Node 24 下，GitHub 脚本测试 17 条、updater 与
+  constants 前端测试 183 条全部通过；受控全量测试覆盖 541 个文件，7263 条通过、
+  3 条跳过，仅 `turso-node.test.ts` 的 3 条既有向量距离浮点精度断言失败。类型检查、
+  Biome lint 和格式检查通过。本机未安装 Cargo，Rust 编译与现有验签单元测试交由
+  跨平台候选 Actions 覆盖。
+- 实现提交为 `5e014c22 feat: publish signed fork updates`。手动候选流水线
+  `Fork Release Installers` 全部使用 `publish_release=false`，只验证各平台构建和签名
+  产物，不创建 Release。
+- 首次候选 run `30341766964` 发现 GitHub Variable
+  `NEXT_PUBLIC_UPDATER_PUBKEY` 末尾误带一个 `%`；构建前校验按设计拒绝了无效 Base64，
+  因而未使用错误信任链继续编译。修正公开变量且不输出私钥后，候选 run
+  `30342573290` 成功验证 Windows x64/ARM64、Linux x64/ARM64 的构建、updater `.sig`
+  收集与 artifact 上传；Android universal/ARM64 APK 也完成系统签名、对齐校验、两份
+  minisign `.sig` 生成与 artifact 上传。
+- run `30342573290` 进一步发现 macOS 矩阵把 bundles 强制限制为 `dmg`，Tauri 因没有
+  构建 updater-enabled `app` 目标而不会生成 `.app.tar.gz`。提交
+  `a92f41bf fix: build macOS updater bundle` 移除该限制，恢复与上游已验证 Universal
+  构建参数一致的 `targets: all` 行为，并新增工作流回归断言。
+- `5e014c22` 与 `a92f41bf` 对应的 Web/API 候选 runs `30341725849`、
+  `30345475227` 均成功。包含 macOS 修复的最终非发布跨平台候选 run 为
+  `30346451019`：Android、macOS Universal、Windows x64/ARM64、Linux x64/ARM64
+  全部成功，Release 作业按预期跳过。
+- macOS 在修复后生成并上传 updater-enabled Universal app 归档及签名；Android
+  universal/ARM64 APK 完成长期系统签名、对齐校验和两份 minisign 签名。六组候选
+  artifacts 均以提交 `a92f41bf3e09c349a587d90fdf8169dc0147f39a` 命名且未过期。
+- 本轮只证明签名候选产物能在全部目标平台稳定生成，不代表正式更新链已经完成终端验收。
+  合并前仍需用候选包验证应用功能；合并并提升版本号后，需再执行一次旧版本到新版本的
+  `latest.json` 检查、下载、验签与安装升级测试。
 
 ### 3.5 本地 Android 构建
 
