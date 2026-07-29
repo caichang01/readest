@@ -619,6 +619,8 @@ pnpm tauri android build -t aarch64 -- --features devtools
 
 开发分支：`codex/upstream-sync-20260729`
 
+兼容合并提交：`3cf4cb67 merge: sync upstream 0.11.20 with fork compatibility`
+
 本轮同步基线：
 
 - fork 起点：`master` 的 `7042e8b5`
