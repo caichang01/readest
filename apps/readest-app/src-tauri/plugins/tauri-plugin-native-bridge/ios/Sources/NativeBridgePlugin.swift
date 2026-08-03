@@ -40,6 +40,10 @@ class UseBackgroundAudioRequestArgs: Decodable {
   let enabled: Bool
 }
 
+class SetTextSelectionSuppressedRequestArgs: Decodable {
+  let suppressed: Bool
+}
+
 class SetSystemUIVisibilityRequestArgs: Decodable {
   let visible: Bool
   let darkMode: Bool
@@ -63,6 +67,10 @@ class SetScreenBrightnessRequestArgs: Decodable {
 class CopyUriToPathRequestArgs: Decodable {
   let uri: String?
   let dst: String?
+}
+
+class ReadShareClipHtmlArgs: Decodable {
+  let fileName: String
 }
 
 struct InitializeRequest: Decodable {
@@ -521,7 +529,7 @@ class NativeBridgePlugin: Plugin {
   // leaving the system stuck at the app's level until the user nudges it
   // manually (issue #4885). We remember the value that was there before the
   // first override so we can hand it back whenever the app leaves the
-  // foreground, and re-assert the app's value when it returns.
+  // foreground; on return the system value stands and the override is dropped.
   private var appDesiredBrightness: CGFloat?
   private var systemBrightnessBeforeOverride: CGFloat?
 
@@ -569,6 +577,13 @@ class NativeBridgePlugin: Plugin {
 
     NotificationCenter.default.addObserver(
       self,
+      selector: #selector(appWillResignActive),
+      name: UIApplication.willResignActiveNotification,
+      object: nil
+    )
+
+    NotificationCenter.default.addObserver(
+      self,
       selector: #selector(appWillEnterForeground),
       name: UIApplication.willEnterForegroundNotification,
       object: nil
@@ -591,14 +606,14 @@ class NativeBridgePlugin: Plugin {
 
   @objc func appWillEnterForeground() {
     logger.log("NativeBridgePlugin: App will enter foreground")
-    // Re-assert the app's brightness that was released on background (#4885).
-    if let desired = appDesiredBrightness {
-      UIScreen.main.brightness = desired
-    }
     webViewLifecycleManager?.handleAppWillEnterForeground()
   }
 
   @objc func appDidBecomeActive() {
+    // The system owns brightness across a background trip: drop our override and
+    // keep whatever brightness the system shows now.
+    appDesiredBrightness = nil
+    systemBrightnessBeforeOverride = nil
     if volumeKeyHandler != nil {
       activateVolumeKeyInterception()
     }
@@ -663,6 +678,7 @@ class NativeBridgePlugin: Plugin {
           "url": save.url,
           "groupId": save.groupId,
           "groupName": save.groupName,
+          "htmlFile": save.htmlFile,
           "addedAt": save.addedAt,
         ]
       }
@@ -716,15 +732,17 @@ class NativeBridgePlugin: Plugin {
     }
   }
 
+  // iOS ignores brightness writes once the app has resigned the foreground.
+  @objc func appWillResignActive() {
+    if appDesiredBrightness != nil, let original = systemBrightnessBeforeOverride {
+      UIScreen.main.brightness = original
+    }
+  }
+
   @objc func appDidEnterBackground() {
     logger.log("NativeBridgePlugin: App did enter background")
     if let handler = volumeKeyHandler, handler.isIntercepting {
       handler.stopInterception()
-    }
-    // Hand screen brightness back to iOS so ambient auto-brightness resumes
-    // while backgrounded; the override is re-applied on foreground (#4885).
-    if appDesiredBrightness != nil, let original = systemBrightnessBeforeOverride {
-      UIScreen.main.brightness = original
     }
     webViewLifecycleManager?.handleAppDidEnterBackground()
   }
@@ -839,6 +857,17 @@ class NativeBridgePlugin: Plugin {
     }
   }
 
+  // Instant-highlight mode owns the touch long-press: suppress the system
+  // text selection for non-editable content so it can never race the app's
+  // hold-to-highlight gesture. See TextSelectionSuppressor.
+  @objc public func set_text_selection_suppressed(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(SetTextSelectionSuppressedRequestArgs.self)
+    DispatchQueue.main.async {
+      TextSelectionSuppressor.setSuppressed(args.suppressed)
+    }
+    invoke.resolve()
+  }
+
   @objc public func auth_with_safari(_ invoke: Invoke) throws {
     let args = try invoke.parseArgs(SafariAuthRequestArgs.self)
     let authUrl = URL(string: args.authUrl)!
@@ -921,10 +950,19 @@ class NativeBridgePlugin: Plugin {
         if volumeKeys {
           self.activateVolumeKeyInterception()
         } else {
+          // Stop intercepting but KEEP the handler alive — do NOT nil it. Its
+          // ReadestTTSAudioSessionClaimed/Released observers must survive the
+          // play/pause cycle. usePagination releases interception the instant TTS
+          // starts playing (the `ttsPlaying` gate) — which is exactly when
+          // tauri-plugin-native-tts posts "Claimed" — and re-acquires it on
+          // pause. If the handler is destroyed here, that fire-once "Claimed" is
+          // lost, and the fresh handler built on the next pause has
+          // ttsOwnsAudioSession=false, so it reconfigures the TTS-owned session
+          // to .mixWithOthers. A mixable session is ineligible for Now Playing,
+          // so iOS vacates the slot and AirPods / lock-screen play resumes
+          // whatever app played before us. A single long-lived handler catches
+          // the claim and leaves the TTS session untouched.
           self.volumeKeyHandler?.stopInterception()
-          DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.volumeKeyHandler = nil
-          }
         }
       }
 
@@ -1520,6 +1558,25 @@ class NativeBridgePlugin: Plugin {
     }
   }
 
+  /// Read + delete a page-HTML file the Share Extension captured from
+  /// the user's signed-in Safari tab (App Group `SharedClips/`). Resolves
+  /// `{ html }`, or `{}` when the file is missing/unreadable — the JS
+  /// caller falls back to the `clip_url` re-fetch.
+  @objc public func read_share_clip_html(_ invoke: Invoke) {
+    let args: ReadShareClipHtmlArgs
+    do {
+      args = try invoke.parseArgs(ReadShareClipHtmlArgs.self)
+    } catch {
+      invoke.reject(error.localizedDescription)
+      return
+    }
+    if let html = AppGroupBridge.takeSharedClipHtml(fileName: args.fileName) {
+      invoke.resolve(["html": html])
+    } else {
+      invoke.resolve([:])
+    }
+  }
+
   /// Hold a strong reference to the active folder picker delegate so
   /// it survives until the user dismisses the picker. `present`
   /// only retains the controller; the delegate is `weak` from
@@ -1640,7 +1697,7 @@ class NativeBridgePlugin: Plugin {
         // Encode and base64 off the main thread; the completion arrives on
         // main and a full-screen encode is fast but not free.
         DispatchQueue.global(qos: .userInteractive).async {
-          guard let data = image.jpegData(compressionQuality: 0.85) else {
+          guard let data = image.jpegData(compressionQuality: 0.9) else {
             return invoke.reject("JPEG encoding failed")
           }
           invoke.resolve(["data": data.base64EncodedString()])

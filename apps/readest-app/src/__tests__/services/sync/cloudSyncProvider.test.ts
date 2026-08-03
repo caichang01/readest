@@ -1,11 +1,16 @@
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect } from 'vitest';
 import type { SystemSettings } from '@/types/settings';
 
 import {
   applySyncBooksAutoEnable,
   cloudProviderDisplayName,
-  getCloudSyncProvider,
+  cloudProvidersDisplayName,
+  getActiveFileSyncBackends,
+  getCloudSyncProviders,
+  getEnabledFileSyncBackends,
+  isReadestCloudEnabled,
   isReadestCloudStorageActive,
+  resolveCloudSyncGate,
   settingsKeyForBackend,
 } from '@/services/sync/cloudSyncProvider';
 
@@ -16,56 +21,36 @@ const makeSettings = (overrides: Partial<SystemSettings> = {}): SystemSettings =
     ...overrides,
   }) as SystemSettings;
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+const s = (partial: Partial<SystemSettings>): SystemSettings => partial as SystemSettings;
 
-describe('getCloudSyncProvider', () => {
-  test('derives readest when no third-party provider is enabled', () => {
-    expect(getCloudSyncProvider(makeSettings())).toBe('readest');
+describe('resolveCloudSyncGate', () => {
+  test('readest is active by default and the fork never pauses sync by plan', () => {
+    expect(resolveCloudSyncGate(makeSettings())).toEqual({
+      readest: true,
+      backends: [],
+      paused: false,
+    });
   });
 
-  test('derives webdav when webdav is enabled', () => {
+  test('third-party provider is active without login or membership state', () => {
     const settings = makeSettings({ webdav: { enabled: true } } as Partial<SystemSettings>);
-    expect(getCloudSyncProvider(settings)).toBe('webdav');
+    expect(resolveCloudSyncGate(settings)).toEqual({
+      readest: false,
+      backends: ['webdav'],
+      paused: false,
+    });
   });
 
-  test('derives gdrive when google drive is enabled', () => {
-    const settings = makeSettings({ googleDrive: { enabled: true } } as Partial<SystemSettings>);
-    expect(getCloudSyncProvider(settings)).toBe('gdrive');
-  });
-
-  test('derives s3 when s3 is enabled', () => {
-    const settings = makeSettings({ s3: { enabled: true } } as Partial<SystemSettings>);
-    expect(getCloudSyncProvider(settings)).toBe('s3');
-  });
-
-  test("returns 'onedrive' when only OneDrive is enabled", () => {
-    expect(getCloudSyncProvider({ onedrive: { enabled: true } } as SystemSettings)).toBe(
-      'onedrive',
-    );
-  });
-
-  test('webdav wins deterministically over s3 when both are enabled (corrupt state)', () => {
+  test('Readest and S3 can be active together', () => {
     const settings = makeSettings({
-      webdav: { enabled: true },
+      readestCloud: { enabled: true },
       s3: { enabled: true },
     } as Partial<SystemSettings>);
-    expect(getCloudSyncProvider(settings)).toBe('webdav');
-  });
-
-  test('webdav wins deterministically when both flags are enabled (corrupt state)', () => {
-    const settings = makeSettings({
-      webdav: { enabled: true },
-      googleDrive: { enabled: true },
-    } as Partial<SystemSettings>);
-    expect(getCloudSyncProvider(settings)).toBe('webdav');
-  });
-
-  test('defaults to readest for missing slices and missing settings', () => {
-    expect(getCloudSyncProvider({} as SystemSettings)).toBe('readest');
-    expect(getCloudSyncProvider(null)).toBe('readest');
-    expect(getCloudSyncProvider(undefined)).toBe('readest');
+    expect(resolveCloudSyncGate(settings)).toEqual({
+      readest: true,
+      backends: ['s3'],
+      paused: false,
+    });
   });
 });
 
@@ -86,14 +71,6 @@ describe('applySyncBooksAutoEnable (upgrade migration for already-enabled provid
     expect(settings.googleDrive?.syncBooks).toBe(true);
   });
 
-  test('flips syncBooks on for an enabled S3 provider', () => {
-    const settings = makeSettings({
-      s3: { enabled: true, syncBooks: false },
-    } as Partial<SystemSettings>);
-    expect(applySyncBooksAutoEnable(settings)).toBe(true);
-    expect(settings.s3?.syncBooks).toBe(true);
-  });
-
   test('no-op when readest is the provider', () => {
     const settings = makeSettings();
     expect(applySyncBooksAutoEnable(settings)).toBe(false);
@@ -107,14 +84,14 @@ describe('applySyncBooksAutoEnable (upgrade migration for already-enabled provid
     expect(applySyncBooksAutoEnable(settings)).toBe(false);
   });
 
-  test('only the selected provider is flipped when both are enabled', () => {
+  test('flips syncBooks on for every enabled provider when multiple are enabled', () => {
     const settings = makeSettings({
       webdav: { enabled: true, syncBooks: false },
       googleDrive: { enabled: true, syncBooks: false },
     } as Partial<SystemSettings>);
     expect(applySyncBooksAutoEnable(settings)).toBe(true);
     expect(settings.webdav?.syncBooks).toBe(true);
-    expect(settings.googleDrive?.syncBooks).toBe(false);
+    expect(settings.googleDrive?.syncBooks).toBe(true);
   });
 });
 
@@ -128,8 +105,8 @@ describe('isReadestCloudStorageActive', () => {
     expect(isReadestCloudStorageActive(settings)).toBe(false);
   });
 
-  test('false for every selected third-party provider', () => {
-    const settings = makeSettings({ s3: { enabled: true } } as Partial<SystemSettings>);
+  test('false for a legacy third-party-only configuration', () => {
+    const settings = makeSettings({ googleDrive: { enabled: true } } as Partial<SystemSettings>);
     expect(isReadestCloudStorageActive(settings)).toBe(false);
   });
 });
@@ -150,5 +127,112 @@ describe('cloudProviderDisplayName', () => {
     expect(cloudProviderDisplayName('s3')).toBe('S3');
     expect(cloudProviderDisplayName('onedrive')).toBe('OneDrive');
     expect(cloudProviderDisplayName('readest')).toBe('Readest Cloud');
+  });
+});
+
+// Moved from src/__tests__/services/sync/file/providerRegistry.test.ts: the
+// function itself moved from providerRegistry.ts into this module.
+describe('getEnabledFileSyncBackends', () => {
+  test('lists only switched-on backends in a stable order', () => {
+    expect(getEnabledFileSyncBackends(s({}))).toEqual([]);
+    expect(getEnabledFileSyncBackends(s({ webdav: { enabled: true } } as never))).toEqual([
+      'webdav',
+    ]);
+    expect(
+      getEnabledFileSyncBackends(
+        s({ webdav: { enabled: true }, googleDrive: { enabled: true } } as never),
+      ),
+    ).toEqual(['webdav', 'gdrive']);
+    expect(
+      getEnabledFileSyncBackends(
+        s({ webdav: { enabled: false }, googleDrive: { enabled: true } } as never),
+      ),
+    ).toEqual(['gdrive']);
+  });
+
+  test("getEnabledFileSyncBackends includes 'onedrive' when enabled", () => {
+    expect(getEnabledFileSyncBackends(s({ onedrive: { enabled: true } } as never))).toContain(
+      'onedrive',
+    );
+  });
+});
+
+describe('isReadestCloudEnabled (derived default)', () => {
+  test('absent field with no third-party enabled means Readest Cloud is on', () => {
+    expect(isReadestCloudEnabled(s({}))).toBe(true);
+  });
+
+  test('absent field with a third-party enabled means Readest Cloud is off (legacy exclusive)', () => {
+    expect(isReadestCloudEnabled(s({ googleDrive: { enabled: true } as never }))).toBe(false);
+  });
+
+  test('explicit true wins over an enabled third-party provider', () => {
+    const settings = s({
+      googleDrive: { enabled: true } as never,
+      readestCloud: { enabled: true },
+    });
+    expect(isReadestCloudEnabled(settings)).toBe(true);
+  });
+
+  test('explicit false wins when nothing else is enabled', () => {
+    expect(isReadestCloudEnabled(s({ readestCloud: { enabled: false } }))).toBe(false);
+  });
+});
+
+describe('getCloudSyncProviders', () => {
+  test('returns readest alone by default', () => {
+    expect(getCloudSyncProviders(s({}))).toEqual(['readest']);
+  });
+
+  test('returns readest plus every enabled backend in fixed order', () => {
+    const settings = s({
+      readestCloud: { enabled: true },
+      onedrive: { enabled: true } as never,
+      webdav: { enabled: true } as never,
+    });
+    expect(getCloudSyncProviders(settings)).toEqual(['readest', 'webdav', 'onedrive']);
+  });
+
+  test('returns an empty list when everything is off', () => {
+    expect(getCloudSyncProviders(s({ readestCloud: { enabled: false } }))).toEqual([]);
+  });
+});
+
+describe('resolveCloudSyncGate (readest + backends together)', () => {
+  test('reports readest and backends together', () => {
+    const settings = s({
+      readestCloud: { enabled: true },
+      googleDrive: { enabled: true } as never,
+    });
+    const gate = resolveCloudSyncGate(settings);
+    expect(gate).toEqual({ readest: true, backends: ['gdrive'], paused: false });
+  });
+
+  test('keeps every selected backend active with no membership gate', () => {
+    const settings = s({
+      readestCloud: { enabled: true },
+      googleDrive: { enabled: true } as never,
+      webdav: { enabled: true } as never,
+    });
+    const gate = resolveCloudSyncGate(settings);
+    expect(gate.readest).toBe(true);
+    expect(gate.backends).toEqual(['webdav', 'gdrive']);
+    expect(gate.paused).toBe(false);
+    expect(getActiveFileSyncBackends(settings)).toEqual(['webdav', 'gdrive']);
+  });
+});
+
+describe('isReadestCloudStorageActive (follows the flag, not exclusivity)', () => {
+  test('follows the Readest Cloud flag, not the absence of third-party providers', () => {
+    const both = s({ readestCloud: { enabled: true }, webdav: { enabled: true } as never });
+    expect(isReadestCloudStorageActive(both)).toBe(true);
+    const off = s({ readestCloud: { enabled: false }, webdav: { enabled: true } as never });
+    expect(isReadestCloudStorageActive(off)).toBe(false);
+  });
+});
+
+describe('cloudProvidersDisplayName', () => {
+  test('joins provider names for the "synced via" copy', () => {
+    expect(cloudProvidersDisplayName(['readest', 'gdrive'])).toBe('Readest Cloud, Google Drive');
   });
 });

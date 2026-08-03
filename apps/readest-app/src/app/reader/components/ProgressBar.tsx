@@ -13,9 +13,10 @@ import {
   getChapterTickFractions,
   getReferencePageInfo,
 } from '@/utils/progress';
-import { SIZE_PER_LOC, SIZE_PER_TIME_UNIT } from '@/services/constants';
 import StatusInfo from './StatusInfo.tsx';
 import StickyProgressBar from './StickyProgressBar.tsx';
+import { convertPagesToTimeRemainingMinutes } from '@/app/library/utils/libraryUtils.ts';
+import { useMedianPageDurationSecs } from '@/hooks/useMedianPageDurationSecs';
 
 interface ProgressBarProps {
   bookKey: string;
@@ -90,6 +91,8 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
       : 0
     : Math.min(Math.max(total - current, 1), pageInfo ? pageInfo.total - pageInfo.current : total);
   const showPagesLeft = pagesLeft > 0 && (total > 0 || !!bookData?.isFixedLayout);
+  const md5 = bookData?.book?.hash;
+  const medianPageDurationSecs = useMedianPageDurationSecs(md5) ?? undefined;
   // Fixed-layout formats (CBZ, PDF) have no chapter structure — every page is
   // its own section — so the remaining count is the whole book, not a chapter.
   const remainingInBook = !!bookData?.isFixedLayout;
@@ -97,14 +100,14 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
     ? remainingInBook
       ? _('{{time}} min left in book', {
           time: formatNumber(
-            Math.round((pagesLeft * SIZE_PER_LOC) / SIZE_PER_TIME_UNIT),
+            convertPagesToTimeRemainingMinutes(pagesLeft, medianPageDurationSecs),
             localize,
             lang,
           ),
         })
       : _('{{time}} min left in chapter', {
           time: formatNumber(
-            Math.round((pagesLeft * SIZE_PER_LOC) / SIZE_PER_TIME_UNIT),
+            convertPagesToTimeRemainingMinutes(pagesLeft, medianPageDurationSecs),
             localize,
             lang,
           ),
@@ -153,7 +156,12 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
       className={clsx(
         'progressinfo pointer-events-none absolute bottom-0 flex items-center justify-between font-sans',
         isEink ? 'text-sm font-normal' : 'text-xs font-extralight',
-        bookData?.isFixedLayout && !isEink
+        // The blend keeps the info legible over an unthemed fixed-layout page,
+        // but it composites the whole container as a group -- with the pills on
+        // it differences a white pill against the white page and paints it pure
+        // black (#5342). The pill backdrop already guarantees legibility, so it
+        // takes over from the blend whenever it is present.
+        bookData?.isFixedLayout && !isEink && !pillClass
           ? 'text-white/75 mix-blend-difference'
           : 'text-base-content',
         isVertical ? 'writing-vertical-rl' : 'w-full',
@@ -194,7 +202,7 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
           isVertical ? 'h-full' : 'w-full',
           // Sticky bar grows on the left; the info widgets pack to the right
           // with even gaps. Without it, keep the 3-zone left/center/right row.
-          stickyBarActive ? 'gap-x-3' : 'justify-between',
+          stickyBarActive ? 'gap-x-3' : 'justify-between gap-x-2',
         )}
         style={isVertical ? {} : { height: `${viewSettings.marginBottomPx}px` }}
       >
@@ -210,9 +218,8 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
         {hasRemainingInfo && (
           <div
             className={clsx(
-              'remaining-info whitespace-nowrap text-start',
-              !stickyBarActive && 'flex-1',
-              showStatusInfo && 'overflow-hidden',
+              'remaining-info text-start truncate',
+              !stickyBarActive && 'flex-1 min-w-0',
             )}
           >
             {viewSettings.showRemainingTime ? (
@@ -267,8 +274,8 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
 
         <div
           className={clsx(
-            'progress-info items-center overflow-hidden whitespace-nowrap text-end tabular-nums',
-            !stickyBarActive && 'flex-1',
+            'progress-info items-center text-end tabular-nums truncate',
+            !stickyBarActive && 'flex-1 min-w-0',
           )}
         >
           {viewSettings.showProgressInfo && (

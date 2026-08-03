@@ -47,6 +47,9 @@ interface Changelog {
   version: string;
   date: string;
   notes: string[];
+  // Auto-translated notes, kept alongside the original English `notes` so the
+  // reader can flip back to the source text. Only set when translation ran.
+  translatedNotes?: string[];
 }
 
 type DownloadEvent =
@@ -110,6 +113,7 @@ export const UpdaterContent = ({
   );
   const [update, setUpdate] = useState<GenericUpdate | Update | null>(null);
   const [changelogs, setChangelogs] = useState<Changelog[]>([]);
+  const [showOriginal, setShowOriginal] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [contentLength, setContentLength] = useState<number | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -445,7 +449,9 @@ export const UpdaterContent = ({
       if (!targetLang.toLowerCase().startsWith('en')) {
         for (const entry of changelogs) {
           try {
-            entry.notes = await translate(entry.notes, { useCache: true });
+            // Preserve the original English `notes`; store the translation
+            // separately so the "Show original" toggle can flip between them.
+            entry.translatedNotes = await translate(entry.notes, { useCache: true });
           } catch (error) {
             console.log('Failed to translate changelog:', error);
           }
@@ -474,33 +480,40 @@ export const UpdaterContent = ({
     let lastLogged = 0;
     setProgress(0);
     setIsDownloading(true);
-    await update.downloadAndInstall?.((event) => {
-      switch (event.event) {
-        case 'Started':
-          contentLength = event.data.contentLength!;
-          setContentLength(contentLength);
-          break;
-        case 'Progress':
-          downloaded += event.data.chunkLength;
-          setDownloaded(downloaded);
-          // Guard against a 0 total (server omitted Content-Length): keep the
-          // bar at an indeterminate 0% instead of NaN/Infinity.
-          const percent = contentLength > 0 ? Math.floor((downloaded / contentLength) * 100) : 0;
-          setProgress(percent);
-          if (downloaded - lastLogged >= 1 * 1024 * 1024) {
-            console.log(`downloaded ${downloaded} bytes from ${contentLength}`);
-            lastLogged = downloaded;
-          }
-          break;
-        case 'Finished':
-          console.log('download finished');
-          setProgress(100);
-          break;
+    try {
+      await update.downloadAndInstall?.((event) => {
+        switch (event.event) {
+          case 'Started':
+            contentLength = event.data.contentLength!;
+            setContentLength(contentLength);
+            break;
+          case 'Progress':
+            downloaded += event.data.chunkLength;
+            setDownloaded(downloaded);
+            // Guard against a 0 total (server omitted Content-Length): keep the
+            // bar at an indeterminate 0% instead of NaN/Infinity.
+            const percent = contentLength > 0 ? Math.floor((downloaded / contentLength) * 100) : 0;
+            setProgress(percent);
+            if (downloaded - lastLogged >= 1 * 1024 * 1024) {
+              console.log(`downloaded ${downloaded} bytes from ${contentLength}`);
+              lastLogged = downloaded;
+            }
+            break;
+          case 'Finished':
+            console.log('download finished');
+            setProgress(100);
+            break;
+        }
+      });
+      console.log('package installed');
+      if (!appService?.isAndroidApp && process.env.NODE_ENV === 'production') {
+        await relaunch();
       }
-    });
-    console.log('package installed');
-    if (!appService?.isAndroidApp && process.env.NODE_ENV === 'production') {
-      await relaunch();
+    } catch (error) {
+      console.error('Failed to download and install update:', error);
+      setError(_('Failed to download and install update'));
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -618,7 +631,17 @@ export const UpdaterContent = ({
           )}
         </div>
         <div className='text-base-content text-sm'>
-          <h3 className='mb-2 font-bold'>{_('Changelog')}</h3>
+          <div className='mb-2 flex items-center justify-between gap-2'>
+            <h3 className='font-bold'>{_('Changelog')}</h3>
+            {changelogs.some((entry) => entry.translatedNotes?.length) && (
+              <button
+                className='btn btn-ghost btn-xs eink-bordered font-normal'
+                onClick={() => setShowOriginal((prev) => !prev)}
+              >
+                {showOriginal ? _('Show translation') : _('Show original')}
+              </button>
+            )}
+          </div>
           <div className='not-eink:bg-base-200 not-eink:px-4 mb-4 rounded-lg pb-2 pt-4'>
             {changelogs.length > 0 ? (
               changelogs.map((entry: Changelog) => (
@@ -627,9 +650,11 @@ export const UpdaterContent = ({
                     {entry.version} ({entry.date})
                   </h4>
                   <ul className='list-disc space-y-1 ps-6 text-sm'>
-                    {entry.notes.map((note: string, i: number) => (
-                      <li key={i}>{note}</li>
-                    ))}
+                    {(showOriginal ? entry.notes : (entry.translatedNotes ?? entry.notes)).map(
+                      (note: string, i: number) => (
+                        <li key={i}>{note}</li>
+                      ),
+                    )}
                   </ul>
                 </div>
               ))

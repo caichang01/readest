@@ -1,6 +1,6 @@
 # Readest fork 二次开发交接记录
 
-最后更新：2026-07-28
+最后更新：2026-08-03
 
 这份文档记录本 fork 相对上游 Readest 的产品目标、已经完成的改造、验证结果、已知问题和后续计划。开始新的 fork 专属开发前，应先阅读本文；完成一个阶段后，应同步更新日期、提交、测试结果和未完成事项。
 
@@ -10,7 +10,11 @@
 
 - `master` 已合并生产化诊断、S3 书籍恢复、自建 Supabase 登录/数据库接入和 S3 设置副本缺失字段修复；第一大需求的合并提交为 `3c74c661 merge: complete self-hosted Supabase integration`。
 - 自建 Supabase 的 Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署、长期 Android 签名、跨平台候选构建、原生端登录、会话恢复和跨设备同步均已完成验收。
-- 第二大需求“自有更新检查与发布链”从 `master` 建立独立分支 `codex/self-hosted-updater` 开发；已完成构建配置注入和跨平台清单映射的首组测试驱动实现，尚未接入正式流水线。
+- 第二大需求“自有更新检查与发布链”已经合并到 `master`；正式 `v0.11.18` Release、
+  fork updater 公钥、签名产物和 `latest.json` 已完成基线验收。
+- 第三大需求“受控同步上游功能”已在 `codex/upstream-sync-20260729` 完成开发、候选
+  流水线和用户验收；2026-08-03 用户明确授权合并到 `master`。本轮目标上游基线为
+  `readest/readest:main` 的 `21e1ed5d`。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -37,6 +41,33 @@
 5. 不直接在 `master` 上开发，不在未经验证时创建版本 Release。
 
 项目规则要求使用 `pnpm worktree:new <branch>` 创建 worktree。不过当前 fork 的脚本仍硬编码 `origin/main`，而远端默认分支是 `origin/master`，因此创建 fork 分支时会失败。2026-07-22 的诊断任务在干净工作区内使用 `git switch -c` 安全回退。后续应单独修复 worktree 脚本，让它自动识别远端默认分支；修复前不要假装 worktree 初始化成功。
+
+### 1.3 上游同步兼容原则
+
+第三大需求采用“上游镜像、独立同步分支、分层解决冲突、完整验证后合并”的受控流程：
+
+1. `origin/upstream` 只镜像 `readest/readest:main`，不得混入 fork 专属提交。
+2. 每轮同步从已发布且验证通过的 `master` 创建 `codex/upstream-sync-*` 分支；禁止把
+   未验证的 `origin/upstream` 直接合并到 `master`。
+3. 使用普通 merge commit 保留共同祖先，不使用 squash 或 rebase 抹去上游合并边界，
+   以保证下一轮仍可进行标准三方合并。
+4. 文本自动合并不等于功能兼容。所有双方共同修改的文件都必须按产品行为重新审查，
+   尤其是访问策略、登录、自建 Supabase、云同步、S3、更新器、版本和 GitHub Actions。
+5. 新引入的上游功能如果与 fork 二次开发发生冲突，必须兼容已经验收的 fork 能力；
+   不得为快速解决冲突而恢复会员门槛、用户云配额、支付/IAP、上游服务端点、上游更新
+   公钥或上游发布流程。
+6. 云同步优先采用上游持续维护的新架构，但必须保留自定义 S3 endpoint、凭据加密同步、
+   settings 缺失字段回填、书籍自动恢复、生产化诊断和第三方存储免会员能力。多 provider
+   行为必须同时覆盖 S3-only、Readest Cloud + S3 以及其他第三方组合。
+7. 上游新增或修改的 `.github/workflows` 一律先进入
+   `.github/upstream-workflows-disabled/`；活动工作流继续使用明确白名单，未经 fork 审核
+   不得执行上游部署、R2、Docker Hub、商店或正式发布动作。
+8. 冲突解决完成后必须执行 fork 不变量测试、目标回归、全量测试、原生检查、数据库验证、
+   非发布跨平台候选构建和真机验收。只有这些检查通过，才可经用户明确授权合并
+   `master`。
+
+每次上游同步都要记录共同祖先、目标上游 SHA、冲突清单、兼容决策、测试结果和未完成
+风险。上游版本号只作为代码来源参考；fork Release 必须保持合法且单调递增的 SemVer。
 
 ## 2. 项目技术基线
 
@@ -585,6 +616,100 @@ pnpm tauri android build -t aarch64 -- --features devtools
 
 2026-07-22 的生产化收敛进一步区分了认证请求签名和书籍文件头签名字节：`signature`、`xAmzSignature` 等认证字段仍会脱敏，`signatureHex` 可以正常导出。正式构建不启用 Tauri `devtools` feature；诊断能力本身不引入大型依赖或资源。
 
+### 3.7 第三大需求：受控同步上游
+
+开发分支：`codex/upstream-sync-20260729`
+
+兼容合并提交：`3cf4cb67 merge: sync upstream 0.11.20 with fork compatibility`
+
+本轮同步基线：
+
+- fork 起点：`master` 的 `7042e8b5`
+- 共同祖先：`c81547cd57a41a17688096338a27921e5690978d`
+- 上游目标：`readest/readest:main` / `origin/upstream` 的
+  `21e1ed5dfa7e9eaf7feb8fb1214df6251d96f27b`
+- 相对共同祖先，fork 有 36 个独有提交，上游有 127 个独有提交；双方共同修改 37 个
+  文件。
+
+真实 merge 共产生 21 个文本冲突，主要分为云同步与设置界面、会员/支付访问策略、
+依赖/锁文件三类。解决原则不是简单选择 ours/theirs，而是以上游新架构为基础，重新落实
+fork 已验收的产品行为：
+
+1. 接入上游多 provider 云同步：Readest Cloud、WebDAV、Google Drive、S3、OneDrive
+   可以独立选择并同时运行；第三方 provider 使用稳定顺序、逐后端故障隔离和逐后端缓存。
+2. 删除上游新架构带回的 `UserPlan`、套餐缓存、Premium badge 和同步暂停门槛。第三方
+   同步与离线 TTS 音频下载均不读取会员状态。
+3. 保留兼容旧设置的派生默认值：未出现 `readestCloud.enabled` 时，有第三方 provider
+   则沿用旧的第三方-only 行为；一旦用户明确选择，`Readest Cloud + S3` 等组合可以同时
+   生效。
+4. 多后端上传会镜像到所有启用 provider；下载和书籍打开失败自动恢复会按稳定顺序尝试
+   所有启用的第三方 provider。此前的 S3 文件完整性检查、自动恢复和诊断日志继续保留。
+5. S3 endpoint、region、bucket、Access Key 和 Secret Key 的设置副本加密/回填能力
+   保留；同时采用上游对连接元数据 push-hash 跟踪的改进，避免 WebDAV/S3 连接地址在
+   登录前配置后滞留在单一设备。
+6. Stripe、Apple/Google IAP 和支付实现继续保持删除；同步清理上游重新加入但已无调用
+   的 Stripe 与 Google Auth 支付依赖。
+7. 活动 GitHub Actions 仍只有 `fork-release.yml` 和 `fork-web-image.yml`。上游工作流
+   继续位于 `.github/upstream-workflows-disabled/`，没有恢复上游部署、R2、商店或发布
+   权限。
+8. 应用代码版本随本轮上游基线进入 `0.11.20`。这只表示候选代码版本；在跨平台候选和
+   真机验收完成前，不合并 `master`、不发布 `v0.11.20` Release。
+
+本轮新增 `.github/scripts/fork-invariants.test.mjs`，持续检查：
+
+- 活动工作流白名单；
+- 会员、Quota、支付和 IAP 路径保持删除；
+- 自建 Supabase、S3 自动恢复、诊断日志、设置副本和 fork updater 信任资产仍存在；
+- fork Release 只使用自有更新端点、公钥和签名密钥。
+
+截至 2026-07-29 的本地验证：
+
+- fork 不变量测试：20/20 通过。
+- 多 provider、设置状态、provider cache、同步编排、阅读器恢复、TTS 入口等定向
+  Vitest：112/112 通过。
+- TypeScript 与 Biome lint：通过，检查 1764 个文件。
+- Biome format check：通过，检查 1798 个文件。
+- 浏览器集成测试：27 个文件、321 条通过、1 条跳过。
+- 浏览器扩展测试：6 个文件、44 条通过；生产 webpack 构建通过。
+- 自建数据库 bootstrap/upgrade 生成测试均通过。
+- `BUILD_STANDALONE=true` 的 Next.js 16.2.11 Web/API 生产构建通过。
+- Turso 官方更新记录确认 SimSIMD 与 Rust 实现的 L2 距离存在平台级精度差异，并已在
+  上游提高相关测试容差。本 fork 将 4 位小数的过严断言调整为 2 位小数，同时保留零
+  距离、距离排序和向量类型行为验证；`turso-node` 53 条通过、1 条跳过。
+- 全量 Vitest：603 个测试文件全部通过；7919 条通过、1 条跳过。
+- 本机当前环境没有 `cargo` 和 `luajit`，因此 Rust fmt/clippy/test 与 KOReader Lua
+  测试未在本机单独执行；不能把“工具未安装”写成测试通过。跨平台 Tauri/Rust 构建链
+  已由下述 GitHub Actions 候选矩阵覆盖。
+
+2026-07-29 的候选流水线验证：
+
+- 开发分支已推送至 `origin/codex/upstream-sync-20260729`，候选提交为
+  `fdd03ff823dbde35a0f65827b4ed7f90219487be`。
+- `Fork Web and API Image` run
+  [`30420126934`](https://github.com/caichang01/readest/actions/runs/30420126934)
+  成功；仅推送该提交对应的不可变 `sha-*` 分支候选镜像，没有更新 `master` 或
+  `latest` 标签。
+- `Fork Release Installers` run
+  [`30420151479`](https://github.com/caichang01/readest/actions/runs/30420151479)
+  使用 `publish_release=false` 成功。Android、Windows x64/ARM64、Linux x64/ARM64、
+  macOS Universal 六个构建任务全部通过，`Publish GitHub Release` 按候选模式正确跳过。
+- 本次 run 生成并保留六组未过期 artifacts：
+  `readest-android-fdd03ff8...`、`readest-windows-x64-fdd03ff8...`、
+  `readest-windows-arm64-fdd03ff8...`、`readest-linux-x64-fdd03ff8...`、
+  `readest-linux-arm64-fdd03ff8...` 和 `readest-macos-universal-fdd03ff8...`。
+- 这次 CI 结果证明全部目标平台可完成编译、签名、打包和 artifact 上传，但不能替代
+  Android/macOS 的账户、云同步、自动恢复及更新检查真机验收。
+
+2026-08-03 的用户验收与合并结论：
+
+- Android 与 macOS 候选包的基本功能测试通过，此前要求保留的登录、自建 Supabase、
+  自定义 S3、跨设备同步和自有更新链没有发现回归。
+- Talebook 书库通过 OPDS 接入 Readest 的方案已完成实际测试，目录访问、书籍获取与
+  阅读流程符合预期。
+- 候选构建、自动化测试和用户验收均已满足合并门槛；用户明确授权以普通 merge commit
+  合并到 `master`。版本已由 `0.11.18` 更新为 `0.11.20`，master 流水线应据此创建
+  `v0.11.20` 正式 Release。
+
 ## 4. S3 跨设备“无法打开书籍”调查
 
 ### 4.1 用户现象
@@ -672,6 +797,12 @@ pnpm tauri android build -t aarch64 -- --features devtools
 - 这是诊断改动之前已存在的 Turso/SQLite 向量实现或精度基线问题，与 S3 日志功能无关。
 
 修复 Turso 测试时，应先确定底层扩展使用的向量编码和近似计算语义，再决定修实现或调整合理容差；不要仅为了全绿而盲目放宽断言。
+
+2026-07-29 已完成上述调查和测试修复。Turso 官方 changelog 明确记录了“提高 L2
+测试容差以匹配 SimSIMD 与 Rust 精度”的同类修正；本项目实测误差最大约 `0.003`，
+因此把相关 `toBeCloseTo` 从 4 位调整为 2 位，而没有改动数据库实现或放宽距离排序、
+零距离等行为断言。修复后 `turso-node.test.ts` 为 53 条通过、1 条跳过；全量 Vitest
+为 603 个测试文件、7919 条通过、1 条跳过、0 条失败。
 
 ## 7. 常用验证命令
 

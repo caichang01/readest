@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NodeDatabaseService } from '@/services/database/nodeDatabaseService';
 import { migrate } from '@/services/database/migrate';
 import { getMigrations } from '@/services/database/migrations';
 import type { DatabaseService } from '@/types/database';
+import type { AppService } from '@/types/system';
 import { StatisticsDb } from '@/services/statistics/statisticsDb';
 
 async function freshStatsDb(): Promise<DatabaseService> {
@@ -150,5 +151,65 @@ describe('StatisticsDb', () => {
     // exactly one row for this md5
     const rows = await stats.getEventsForPush(-1); // no events; just exercise no crash
     void rows;
+  });
+
+  it('returns null until enough page data exists for a median', async () => {
+    const id = await stats.upsertBook({ bookMd5: 'm-few', title: 'T', authors: 'A' });
+    for (let i = 0; i < 4; i++) {
+      await stats.insertPageEvent(id, {
+        page: i,
+        startTime: 100 + i,
+        duration: 10,
+        totalPages: 50,
+      });
+    }
+    expect(await stats.getMedianPageDurationSecs(id)).toBeNull();
+  });
+
+  it('takes the median by duration value, not by recency (odd count)', async () => {
+    const id = await stats.upsertBook({ bookMd5: 'm-odd', title: 'T', authors: 'A' });
+    // Inserted in ascending start_time; durations are NOT sorted by value, so the
+    // median must sort by value before picking the middle (recency-middle is 50).
+    const byTime = [30, 10, 50, 20, 40];
+    for (let i = 0; i < byTime.length; i++) {
+      await stats.insertPageEvent(id, {
+        page: i,
+        startTime: 100 + i,
+        duration: byTime[i]!,
+        totalPages: 50,
+      });
+    }
+    // Sorted: [10, 20, 30, 40, 50] -> median 30.
+    expect(await stats.getMedianPageDurationSecs(id)).toBe(30);
+  });
+
+  it('averages the two middle durations (even count)', async () => {
+    const id = await stats.upsertBook({ bookMd5: 'm-even', title: 'T', authors: 'A' });
+    const byTime = [60, 10, 50, 20, 40, 30];
+    for (let i = 0; i < byTime.length; i++) {
+      await stats.insertPageEvent(id, {
+        page: i,
+        startTime: 100 + i,
+        duration: byTime[i]!,
+        totalPages: 50,
+      });
+    }
+    // Sorted: [10, 20, 30, 40, 50, 60] -> (30 + 40) / 2 = 35.
+    expect(await stats.getMedianPageDurationSecs(id)).toBe(35);
+  });
+});
+
+describe('StatisticsDb.open', () => {
+  it('retries after a transient singleton open failure', async () => {
+    const db = await freshStatsDb();
+    const error = new Error('transient open failure');
+    const openDatabase = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(db);
+    const appService = { openDatabase } as unknown as AppService;
+
+    await expect(StatisticsDb.open(appService)).rejects.toBe(error);
+
+    const stats = await StatisticsDb.open(appService);
+    expect(openDatabase).toHaveBeenCalledTimes(2);
+    await stats.close();
   });
 });

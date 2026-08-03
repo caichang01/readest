@@ -29,6 +29,7 @@ import { OPDSFeed, OPDSPublication, OPDSSearch, REL } from '@/types/opds';
 import {
   expandOPDSSearchTemplate,
   getFileExtFromPath,
+  getSafeDOMParserMimeType,
   isSearchLink,
   looksLikeXMLContent,
   MIME,
@@ -307,7 +308,7 @@ export default function BrowserPage() {
           } else {
             const contentType = res.headers.get('Content-Type') ?? MIME.HTML;
             const type = parseMediaType(contentType)?.mediaType ?? MIME.HTML;
-            const htmlDoc = new DOMParser().parseFromString(text, type as DOMParserSupportedType);
+            const htmlDoc = new DOMParser().parseFromString(text, getSafeDOMParserMimeType(type));
 
             if (!htmlDoc.head) {
               stashOPDSReturnTarget(searchParams);
@@ -627,13 +628,7 @@ export default function BrowserPage() {
                 console.error('OPDS: failed to update source map:', sourceMapError);
               }
             }
-            if (
-              user &&
-              book &&
-              !book.uploadedAt &&
-              settings.autoUpload &&
-              isReadestCloudStorageActive(settings)
-            ) {
+            if (user && book && !book.uploadedAt && isReadestCloudStorageActive(settings)) {
               setTimeout(() => {
                 transferManager.queueUpload(book);
               }, 3000);
@@ -651,7 +646,7 @@ export default function BrowserPage() {
         throw e;
       }
     },
-    [user, state.baseURL, appService, libraryLoaded, settings.autoUpload, catalogSourceId],
+    [user, state.baseURL, appService, libraryLoaded, catalogSourceId],
   );
 
   const handleStream = useCallback(

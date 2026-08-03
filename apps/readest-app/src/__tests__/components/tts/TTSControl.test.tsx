@@ -21,9 +21,27 @@ vi.mock('@/app/reader/hooks/useTTSControl', () => ({
   useTTSControl: () => ttsState,
 }));
 
+vi.mock('@/app/reader/hooks/useTTSDownloads', () => ({
+  useTTSDownloads: () => ({
+    supported: false,
+    chapters: [],
+    statuses: new Map(),
+    cacheBytes: 0,
+    download: { activeChapterKey: null, done: 0, total: 0 },
+    downloadChapter: vi.fn(),
+    downloadAll: vi.fn(),
+    cancel: vi.fn(),
+    statusOf: () => 'none',
+    refresh: vi.fn(),
+  }),
+}));
+
+vi.mock('@/store/readerProgressStore', () => ({
+  useBookProgress: () => ({ index: 0 }),
+}));
+
 vi.mock('@/app/reader/components/tts/TTSMiniPlayer', () => ({
   __esModule: true,
-  TTS_MINI_PLAYER_CLEARANCE: 64,
   default: ({ onExpand }: { onExpand: () => void }) => (
     <div data-testid='mini-player' onClick={onExpand} />
   ),
@@ -47,6 +65,7 @@ describe('TTSControl', () => {
       ttsClientsInited: true,
       showIndicator: true,
       showBackToCurrentTTSLocation: false,
+      getController: () => null,
       timeoutOption: 0,
       timeoutTimestamp: 0,
       chapterRemainingSec: null,
@@ -79,11 +98,21 @@ describe('TTSControl', () => {
     expect(screen.queryByTestId('player-sheet')).toBeNull();
   });
 
-  test('renders nothing before the clients are initialized', () => {
+  test('renders nothing while no session is active', () => {
     Object.assign(ttsState, { showIndicator: false, ttsClientsInited: false });
     render(<TTSControl bookKey='b1' gridInsets={gridInsets} />);
     expect(screen.queryByTestId('mini-player')).toBeNull();
     expect(screen.queryByTestId('player-sheet')).toBeNull();
+  });
+
+  test('mounts the mini player immediately, before the clients are initialized', () => {
+    Object.assign(ttsState, { showIndicator: true, ttsClientsInited: false });
+    render(<TTSControl bookKey='b1' gridInsets={gridInsets} />);
+    expect(screen.getByTestId('mini-player')).toBeTruthy();
+    // Expanding needs initialized clients; taps are ignored until then.
+    fireEvent.click(screen.getByTestId('mini-player'));
+    expect(screen.queryByTestId('player-sheet')).toBeNull();
+    expect(screen.getByTestId('mini-player')).toBeTruthy();
   });
 
   test('expanding the mini player opens the sheet and hides the mini player', () => {

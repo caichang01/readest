@@ -4,16 +4,16 @@ import type { Book } from '@/types/book';
 import type { EnvConfigType } from '@/services/environment';
 
 const mocks = vi.hoisted(() => ({
-  provider: 's3' as 's3' | 'readest',
+  backends: ['s3'] as string[],
   download: vi.fn(),
   updateBook: vi.fn(),
 }));
 
 vi.mock('@/services/sync/cloudSyncProvider', () => ({
-  getCloudSyncProvider: () => mocks.provider,
+  getActiveFileSyncBackends: () => mocks.backends,
 }));
 vi.mock('@/services/sync/file/runLibrarySync', () => ({
-  runActiveFileBookDownload: mocks.download,
+  runFileBookDownload: mocks.download,
 }));
 vi.mock('@/store/settingsStore', () => ({
   useSettingsStore: { getState: () => ({ settings: {} }) },
@@ -39,7 +39,7 @@ const book = {
 
 describe('tryRecoverThirdPartyBook', () => {
   beforeEach(() => {
-    mocks.provider = 's3';
+    mocks.backends = ['s3'];
     mocks.download.mockReset().mockResolvedValue(true);
     mocks.updateBook.mockReset().mockResolvedValue(undefined);
   });
@@ -56,11 +56,17 @@ describe('tryRecoverThirdPartyBook', () => {
     expect(recovered).not.toBe(book);
   });
 
-  test('does not recover when Readest Cloud is active', async () => {
-    mocks.provider = 'readest';
+  test('does not recover when no third-party backend is active', async () => {
+    mocks.backends = [];
 
     expect(await tryRecoverThirdPartyBook(envConfig, book, 'parse-book-document')).toBeNull();
     expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  test('still recovers from S3 when Readest Cloud is enabled alongside it', async () => {
+    mocks.backends = ['s3'];
+    expect(await tryRecoverThirdPartyBook(envConfig, book, 'parse-book-document')).not.toBeNull();
+    expect(mocks.download).toHaveBeenCalled();
   });
 
   test('does not recover unrelated reader failures or external books', async () => {

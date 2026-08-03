@@ -4,9 +4,11 @@
  * backends are enabled and build each one by kind, never naming WebDAV or Drive
  * directly.
  *
- * The settings view is intentionally narrow: connection fields for credentialed
- * providers and enabled flags for OAuth providers. Drive providers assemble
- * their tokens from secure storage, so they need no credential fields here.
+ * The settings view here is intentionally narrow — just the `enabled` flags plus
+ * the WebDAV transport config — so this PR can land the seam without depending on
+ * the full Google Drive settings shape and Integrations UI (which arrive with the
+ * settings-UI phase). Drive builds itself from the env-baked client id + the
+ * keychain token, so it needs no settings to construct.
  */
 import type { FileSyncProvider } from './provider';
 import type { S3Settings, WebDAVSettings } from '@/types/settings';
@@ -25,56 +27,25 @@ export interface FileSyncBackendsSettings {
   onedrive?: { enabled?: boolean };
 }
 
-/** The backends the user has switched on, in a stable order. */
-export const getEnabledFileSyncBackends = (
-  settings: FileSyncBackendsSettings,
-): FileSyncBackendKind[] => {
-  const enabled: FileSyncBackendKind[] = [];
-  if (settings.webdav?.enabled) enabled.push('webdav');
-  if (settings.googleDrive?.enabled) enabled.push('gdrive');
-  if (settings.s3?.enabled) enabled.push('s3');
-  if (settings.onedrive?.enabled) enabled.push('onedrive');
-  return enabled;
-};
-
-/** Whether a backend has enough local configuration to start syncing. */
-export const isFileSyncBackendConfigured = (
-  kind: FileSyncBackendKind,
-  settings: FileSyncBackendsSettings,
-): boolean => {
-  if (kind === 'webdav') {
-    const config = settings.webdav;
-    return !!(config?.enabled && config.serverUrl && config.username);
-  }
-  if (kind === 's3') {
-    const config = settings.s3;
-    return !!(
-      config?.enabled &&
-      config.endpoint &&
-      config.bucket &&
-      config.accessKeyId &&
-      config.secretAccessKey
-    );
-  }
-  if (kind === 'onedrive') return !!settings.onedrive?.enabled;
-  return !!settings.googleDrive?.enabled;
-};
-
 /**
- * One provider is memoised per connection key and shared by every surface
- * (the reader's per-book sync, the library auto-sync, Sync now / pull to
- * refresh). What makes reuse worth it is the provider's path->id cache
- * (Drive): a cold provider re-resolves /Readest, books/ and library.json by
- * name query on every engine build, so one engine per book open/close/sync
- * turned each user action into a burst of redundant remote requests. The key
- * mirrors the connection-relevant settings, so a config edit rebuilds; stale
- * cached ids self-heal through the provider's 404 eviction. Drive connect /
- * disconnect must call {@link resetFileSyncProviderCache} — its token source
- * changes identity without any key input changing.
+ * One provider is memoised PER BACKEND and shared by every surface (the reader's
+ * per-book sync, the library auto-sync, Sync now / pull to refresh). What makes
+ * reuse worth it is the provider's path->id cache (Drive): a cold provider
+ * re-resolves /Readest, books/ and library.json by name query on every engine
+ * build, so one engine per book open/close/sync turned each user action into a
+ * burst of redundant remote requests.
+ *
+ * The cache is keyed by backend kind because several backends now sync in the
+ * same pass (#5062) — a single shared slot would have them evict each other on
+ * every alternation. The value's `key` mirrors the connection-relevant settings,
+ * so a config edit rebuilds that backend only; stale cached ids self-heal through
+ * the provider's 404 eviction. Drive / OneDrive connect and disconnect must call
+ * {@link resetFileSyncProviderCache} — their token source changes identity
+ * without any key input changing.
  */
-let cachedProvider: { key: string; provider: FileSyncProvider } | null = null;
+const providerCache = new Map<FileSyncBackendKind, { key: string; provider: FileSyncProvider }>();
 
-export const fileSyncProviderConfigKey = (
+const providerCacheKey = (
   kind: FileSyncBackendKind,
   settings: FileSyncBackendsSettings,
 ): string => {
@@ -91,7 +62,7 @@ export const fileSyncProviderConfigKey = (
 };
 
 export const resetFileSyncProviderCache = (): void => {
-  cachedProvider = null;
+  providerCache.clear();
 };
 
 /**
@@ -103,8 +74,9 @@ export const createFileSyncProvider = async (
   kind: FileSyncBackendKind,
   settings: FileSyncBackendsSettings,
 ): Promise<FileSyncProvider | null> => {
-  const key = fileSyncProviderConfigKey(kind, settings);
-  if (cachedProvider?.key === key) return cachedProvider.provider;
+  const key = providerCacheKey(kind, settings);
+  const cached = providerCache.get(kind);
+  if (cached?.key === key) return cached.provider;
   const provider =
     kind === 'webdav'
       ? settings.webdav
@@ -117,6 +89,6 @@ export const createFileSyncProvider = async (
         : kind === 'onedrive'
           ? await buildOneDriveProvider()
           : await buildGoogleDriveProvider();
-  if (provider) cachedProvider = { key, provider };
+  if (provider) providerCache.set(kind, { key, provider });
   return provider;
 };
