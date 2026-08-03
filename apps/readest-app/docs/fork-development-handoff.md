@@ -1,6 +1,6 @@
 # Readest fork 二次开发交接记录
 
-最后更新：2026-07-29
+最后更新：2026-08-03
 
 这份文档记录本 fork 相对上游 Readest 的产品目标、已经完成的改造、验证结果、已知问题和后续计划。开始新的 fork 专属开发前，应先阅读本文；完成一个阶段后，应同步更新日期、提交、测试结果和未完成事项。
 
@@ -12,8 +12,9 @@
 - 自建 Supabase 的 Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署、长期 Android 签名、跨平台候选构建、原生端登录、会话恢复和跨设备同步均已完成验收。
 - 第二大需求“自有更新检查与发布链”已经合并到 `master`；正式 `v0.11.18` Release、
   fork updater 公钥、签名产物和 `latest.json` 已完成基线验收。
-- 第三大需求“受控同步上游功能”在 `codex/upstream-sync-20260729` 开发；本轮目标上游
-  基线为 `readest/readest:main` 的 `21e1ed5d`。
+- 第三大需求“受控同步上游功能”已在 `codex/upstream-sync-20260729` 完成开发、候选
+  流水线和用户验收；2026-08-03 用户明确授权合并到 `master`。本轮目标上游基线为
+  `readest/readest:main` 的 `21e1ed5d`。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -699,12 +700,15 @@ fork 已验收的产品行为：
 - 这次 CI 结果证明全部目标平台可完成编译、签名、打包和 artifact 上传，但不能替代
   Android/macOS 的账户、云同步、自动恢复及更新检查真机验收。
 
-合并 `master` 前仍需完成：
+2026-08-03 的用户验收与合并结论：
 
-1. 至少在 Android 与 macOS 验证登录/会话、Readest-only、S3-only、Readest + S3、
-   跨设备书籍/进度/笔记/设置、删除本地副本后自动恢复和更新检查。
-2. 用户确认候选验收并明确授权后，才以普通 merge commit 合并到 `master`。由于版本
-   已从 `0.11.18` 变为 `0.11.20`，届时 master 流水线会创建新的正式 Release。
+- Android 与 macOS 候选包的基本功能测试通过，此前要求保留的登录、自建 Supabase、
+  自定义 S3、跨设备同步和自有更新链没有发现回归。
+- Talebook 书库通过 OPDS 接入 Readest 的方案已完成实际测试，目录访问、书籍获取与
+  阅读流程符合预期。
+- 候选构建、自动化测试和用户验收均已满足合并门槛；用户明确授权以普通 merge commit
+  合并到 `master`。版本已由 `0.11.18` 更新为 `0.11.20`，master 流水线应据此创建
+  `v0.11.20` 正式 Release。
 
 ## 4. S3 跨设备“无法打开书籍”调查
 
