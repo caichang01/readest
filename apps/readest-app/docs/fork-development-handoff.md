@@ -609,7 +609,24 @@ macOS Universal 和 Windows x64/ARM64 均成功；Linux x64/ARM64 在 75 分钟�
 - `pnpm lint` 通过，TypeScript 与 Biome lint 覆盖 1764 个文件。
 - 全量 Vitest 603 个测试文件通过；7919 条通过、1 条跳过、0 条失败。
 - 本机没有 Cargo 和 Linux AppImage 构建环境；Tauri CLI 实际编译及 Linux x64/ARM64
-  AppImage、签名和 artifact 验证必须由 `publish_release=false` 的候选 Actions 完成。
+  AppImage、签名和 artifact 验证由下述 `publish_release=false` 候选 Actions 完成。
+
+2026-08-04 候选流水线验证：
+
+- 修复提交 `c3ec9b98 fix: make Linux AppImage bundling deterministic` 已推送到开发分支。
+- `Fork Release Installers` run
+  [`30868381320`](https://github.com/caichang01/readest/actions/runs/30868381320) 在提交
+  `c3ec9b98dd86f0f2a70027f03678bea0cb18dccd` 上使用 `publish_release=false` 全部成功。
+- Linux ARM64 用时约 22 分 26 秒，Linux x64 用时约 27 分 05 秒；两个作业均完成固定
+  bundler 安装、helper 下载与哈希校验、AppImage 构建、签名资产收集和 artifact 上传，
+  没有再次出现 Xvfb/WebKit 挂起。
+- Android、macOS Universal、Windows x64/ARM64 同时成功，证明本次 Linux 专属条件
+  没有影响其他平台；Android 继续使用长期签名配置并完成 APK 验证。
+- 六组候选 artifacts 均已上传并保留至 2026-09-03；`Publish GitHub Release` 按非发布
+  模式正确跳过，没有创建或覆盖 `v0.11.20`。
+- 分支 push 触发的 `Fork Web and API Image` run
+  [`30868360367`](https://github.com/caichang01/readest/actions/runs/30868360367) 也成功，仅发布
+  不可变 SHA 候选镜像，没有更新 `master` 或 `latest`。
 
 ### 3.5 本地 Android 构建
 
