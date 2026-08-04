@@ -26,3 +26,33 @@ test('desktop updater builds use the generated fork-only Tauri overlay', () => {
   assert.match(workflow, /tauri_args: --target universal-apple-darwin(?:\r?\n)/);
   assert.doesNotMatch(workflow, /universal-apple-darwin --bundles dmg/);
 });
+
+test('Linux AppImage builds use pinned and verified bundler inputs', () => {
+  assert.match(
+    workflow,
+    /TAURI_PORTABLE_APPIMAGE_REV:\s*[0-9a-f]{40}/,
+  );
+  assert.match(workflow, /QUICK_SHARUN_REV:\s*[0-9a-f]{40}/);
+  assert.match(workflow, /QUICK_SHARUN_SHA256:\s*[0-9a-f]{64}/);
+  assert.doesNotMatch(workflow, /--branch feat\/truly-portable-appimage/);
+  assert.match(workflow, /git -C .* apply .*tauri-portable-appimage\.patch/s);
+  assert.match(workflow, /curl .*--connect-timeout .*--max-time/s);
+  assert.match(
+    workflow,
+    /api\.github\.com\/repos\/pkgforge-dev\/Anylinux-AppImages\/contents\/useful-tools\/quick-sharun\.sh\?ref=\$\{QUICK_SHARUN_REV\}/,
+  );
+  assert.doesNotMatch(workflow, /raw\.githubusercontent\.com/);
+  assert.match(workflow, /sha256sum --check/);
+  assert.match(workflow, /timeout --signal=TERM --kill-after=30s 50m cargo tauri build/);
+
+  const bundlerPatch = readFileSync(
+    new URL('../patches/tauri-portable-appimage.patch', import.meta.url),
+    'utf8',
+  );
+  assert.match(bundlerPatch, /quick-sharun\.sh was not preloaded/);
+  const patchAdditions = bundlerPatch
+    .split('\n')
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+    .join('\n');
+  assert.doesNotMatch(patchAdditions, /refs\/heads\/main/);
+});

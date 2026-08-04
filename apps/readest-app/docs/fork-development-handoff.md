@@ -1,6 +1,6 @@
 # Readest fork 二次开发交接记录
 
-最后更新：2026-08-03
+最后更新：2026-08-04
 
 这份文档记录本 fork 相对上游 Readest 的产品目标、已经完成的改造、验证结果、已知问题和后续计划。开始新的 fork 专属开发前，应先阅读本文；完成一个阶段后，应同步更新日期、提交、测试结果和未完成事项。
 
@@ -12,9 +12,12 @@
 - 自建 Supabase 的 Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署、长期 Android 签名、跨平台候选构建、原生端登录、会话恢复和跨设备同步均已完成验收。
 - 第二大需求“自有更新检查与发布链”已经合并到 `master`；正式 `v0.11.18` Release、
   fork updater 公钥、签名产物和 `latest.json` 已完成基线验收。
-- 第三大需求“受控同步上游功能”已在 `codex/upstream-sync-20260729` 完成开发、候选
-  流水线和用户验收；2026-08-03 用户明确授权合并到 `master`。本轮目标上游基线为
+- 第三大需求“受控同步上游功能”已经通过 `62f9f3d1 merge: sync upstream 0.11.20
+  with fork compatibility` 合并到 `master` 并推送远端。本轮目标上游基线为
   `readest/readest:main` 的 `21e1ed5d`。
+- 合并后 Web/API、Android、macOS 和 Windows 构建成功；Linux x64/ARM64 在 AppImage
+  打包器执行浮动 `quick-sharun.sh` 时超时，导致 `v0.11.20` Release 未创建。正式修复
+  位于 `codex/fix-linux-appimage-bundler`，合并前必须完成非发布跨平台候选验证。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -555,6 +558,75 @@ Android 正式可更新签名依赖仓库 Secrets：
 - 已安装的 `0.11.18` 候选包不会把正式 `0.11.18` 判断为更高版本。本 Release 用作正式
   下载与信任基线；完整自动更新终端验收需要后续发布合法 SemVer `0.11.19`，再从
   `0.11.18` 执行检查、下载、验签和安装升级。
+
+### 3.4.2 Linux AppImage 打包器确定性修复
+
+开发分支：`codex/fix-linux-appimage-bundler`
+
+2026-08-03 的 `master` installer run
+[`30789300833`](https://github.com/caichang01/readest/actions/runs/30789300833) 中，Android、
+macOS Universal 和 Windows x64/ARM64 均成功；Linux x64/ARM64 在 75 分钟后被取消，
+最终 Release 作业因此跳过，未创建 `v0.11.20`。
+
+日志和源码复核结论：
+
+- Linux Rust release 编译、deb 和 rpm 打包均已完成，停滞发生在 AppImage 阶段。
+- 日志最后一行停在 `Downloading ... quick-sharun.sh`，但 Runner 清理出的孤儿进程包括
+  `quick-sharun.sh`、`xvfb-run`、`MiniBrowser` 和 `WebKitNetworkProcess`；这证明脚本
+  已经执行，真正未返回的是它启动 GUI/WebKit 进行动态库探测的阶段，而不是应用编译。
+- 流水线原先提前写入固定版 helper，但 Tauri 的浮动实验分支已改为无条件重新下载
+  `Anylinux-AppImages@main` 并覆盖缓存；原有 pin 步骤因此失效。
+- `cargo install --branch feat/truly-portable-appimage` 同时使 Tauri CLI 自身随远端分支
+  漂移，无法从仓库提交唯一确定实际参与发布的 bundler 源码。
+- 本机不使用代理直接访问 `raw.githubusercontent.com` 也复现接收超时；临时使用用户
+  提供的本机代理后，固定脚本下载及 SHA-256 校验成功。代理只用于本地验证，没有写入
+  仓库；GitHub Runner 无法访问该本机代理。即便只是网络问题，原流程也缺少足够短的
+  下载和执行失败边界。
+
+正式修复设计：
+
+1. Tauri portable AppImage CLI 固定到完整提交 SHA；流水线先验证 fetch 得到的 SHA，
+   再从本地源码安装，不再跟随浮动 branch。
+2. 仓库保存一个最小 Tauri 补丁：bundler 只接受 CI 预加载的 `quick-sharun.sh`，缺失时
+   立即失败，不再自行下载或覆盖为 `main`。
+3. helper 固定到已通过历史候选构建的提交，通过 GitHub Contents API 获取，并使用仓库
+   固定的 SHA-256 校验后才赋予执行权限。下载具有连接超时、总超时和有限重试。
+4. Linux `cargo tauri build` 增加 50 分钟命令级上限；异常时在 job 的 75 分钟上限之前
+   明确失败并保留后续诊断空间。没有关闭 `STRACE_MODE`，避免在未经运行验证时漏装
+   WebKit 动态加载依赖。
+5. 工作流契约测试禁止恢复浮动 Tauri branch、未校验 helper、`raw.githubusercontent`
+   下载以及没有命令级超时的 Linux 构建。
+
+本地验证截至 2026-08-04：
+
+- 新增工作流契约测试先在旧实现上失败，完成修复后 4/4 通过。
+- 全部 GitHub 脚本测试 21/21 通过。
+- Tauri 补丁已对固定提交 `503bdbc1eade37d50a64ea7f81dbe853338b7fda` 执行
+  `git apply --check`，可以干净应用。
+- 固定 helper 内容通过 GitHub Contents API 获取后，SHA-256 与仓库值一致。
+- YAML 语法解析、`git diff --check` 和 Biome format check 通过；格式检查覆盖 1798 个
+  文件。
+- `pnpm lint` 通过，TypeScript 与 Biome lint 覆盖 1764 个文件。
+- 全量 Vitest 603 个测试文件通过；7919 条通过、1 条跳过、0 条失败。
+- 本机没有 Cargo 和 Linux AppImage 构建环境；Tauri CLI 实际编译及 Linux x64/ARM64
+  AppImage、签名和 artifact 验证由下述 `publish_release=false` 候选 Actions 完成。
+
+2026-08-04 候选流水线验证：
+
+- 修复提交 `c3ec9b98 fix: make Linux AppImage bundling deterministic` 已推送到开发分支。
+- `Fork Release Installers` run
+  [`30868381320`](https://github.com/caichang01/readest/actions/runs/30868381320) 在提交
+  `c3ec9b98dd86f0f2a70027f03678bea0cb18dccd` 上使用 `publish_release=false` 全部成功。
+- Linux ARM64 用时约 22 分 26 秒，Linux x64 用时约 27 分 05 秒；两个作业均完成固定
+  bundler 安装、helper 下载与哈希校验、AppImage 构建、签名资产收集和 artifact 上传，
+  没有再次出现 Xvfb/WebKit 挂起。
+- Android、macOS Universal、Windows x64/ARM64 同时成功，证明本次 Linux 专属条件
+  没有影响其他平台；Android 继续使用长期签名配置并完成 APK 验证。
+- 六组候选 artifacts 均已上传并保留至 2026-09-03；`Publish GitHub Release` 按非发布
+  模式正确跳过，没有创建或覆盖 `v0.11.20`。
+- 分支 push 触发的 `Fork Web and API Image` run
+  [`30868360367`](https://github.com/caichang01/readest/actions/runs/30868360367) 也成功，仅发布
+  不可变 SHA 候选镜像，没有更新 `master` 或 `latest`。
 
 ### 3.5 本地 Android 构建
 
