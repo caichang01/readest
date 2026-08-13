@@ -15,7 +15,8 @@ BEGIN
     FROM readest_internal.schema_migrations
     WHERE version IN (
       '20260727_self_hosted_baseline_017',
-      '20260727_self_hosted_baseline_018'
+      '20260727_self_hosted_baseline_018',
+      '20260813_self_hosted_baseline_019'
     )
   ) THEN
     RAISE EXCEPTION 'Readest self-hosted baseline record is missing';
@@ -27,6 +28,24 @@ BEGIN
     WHERE version = '018_add_storage_stats_rpc'
   ) THEN
     RAISE EXCEPTION 'Readest storage statistics migration record is missing';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM readest_internal.schema_migrations
+    WHERE version = '019_add_metadata_updated_at'
+  ) THEN
+    RAISE EXCEPTION 'Readest metadata timestamp migration record is missing';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'books'
+      AND column_name = 'metadata_updated_at'
+  ) THEN
+    RAISE EXCEPTION 'Readest books table is missing metadata_updated_at';
   END IF;
 
   IF to_regprocedure('public.get_storage_by_book_hash(uuid)') IS NULL THEN

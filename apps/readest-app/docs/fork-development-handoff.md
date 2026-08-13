@@ -1,6 +1,6 @@
 # Readest fork 二次开发交接记录
 
-最后更新：2026-08-04
+最后更新：2026-08-13
 
 这份文档记录本 fork 相对上游 Readest 的产品目标、已经完成的改造、验证结果、已知问题和后续计划。开始新的 fork 专属开发前，应先阅读本文；完成一个阶段后，应同步更新日期、提交、测试结果和未完成事项。
 
@@ -12,12 +12,13 @@
 - 自建 Supabase 的 Auth、数据库基线、存储统计 RPC、客户端构建配置、Web/API 部署、长期 Android 签名、跨平台候选构建、原生端登录、会话恢复和跨设备同步均已完成验收。
 - 第二大需求“自有更新检查与发布链”已经合并到 `master`；正式 `v0.11.18` Release、
   fork updater 公钥、签名产物和 `latest.json` 已完成基线验收。
-- 第三大需求“受控同步上游功能”已经通过 `62f9f3d1 merge: sync upstream 0.11.20
-  with fork compatibility` 合并到 `master` 并推送远端。本轮目标上游基线为
-  `readest/readest:main` 的 `21e1ed5d`。
-- 合并后 Web/API、Android、macOS 和 Windows 构建成功；Linux x64/ARM64 在 AppImage
-  打包器执行浮动 `quick-sharun.sh` 时超时，导致 `v0.11.20` Release 未创建。正式修复
-  位于 `codex/fix-linux-appimage-bundler`，合并前必须完成非发布跨平台候选验证。
+- 第三大需求“受控同步上游功能”的首轮同步已经通过
+  `62f9f3d1 merge: sync upstream 0.11.20 with fork compatibility` 合并到 `master`；随后
+  `7c29645f merge: stabilize Linux AppImage release builds` 完成 AppImage 确定性修复并发布
+  `v0.11.20`。
+- 2026-08-13 已从该已发布基线创建 `codex/upstream-sync-20260813`，同步上游 `0.12.1`
+  的 147 个新提交。冲突兼容、本地静态检查、Rust/数据库/重点前端测试已经完成；在非发布
+  跨平台候选流水线和用户验收完成前，本分支不得合并到 `master`。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -781,6 +782,74 @@ fork 已验收的产品行为：
 - 候选构建、自动化测试和用户验收均已满足合并门槛；用户明确授权以普通 merge commit
   合并到 `master`。版本已由 `0.11.18` 更新为 `0.11.20`，master 流水线应据此创建
   `v0.11.20` 正式 Release。
+
+### 3.7.1 2026-08-13 第二轮受控同步上游
+
+开发分支：`codex/upstream-sync-20260813`
+
+本轮同步基线：
+
+- fork 起点：已发布 `v0.11.20` 的 `master`，提交 `7c29645f`。
+- 共同祖先：`21e1ed5dfa7e9eaf7feb8fb1214df6251d96f27b`。
+- 上游目标：`readest/readest:main` 的
+  `42c7a2cb0f46dc5b624918ba7dc000ca70f89e2e`，应用版本 `0.12.1`。
+- 上游相对共同祖先新增 147 个提交；同步前已将该精确提交以纯快进方式镜像到
+  `origin/upstream`。
+
+本轮按上一轮相同的普通 merge 流程处理冲突。兼容决策如下：
+
+1. 账户页保留上游“删除全部书籍”等新功能，但不恢复套餐、订阅、Stripe、购买或 IAP
+   UI/API；上游新增的 Google IAP 测试与实现路径继续删除。
+2. 集成设置接入上游 iCloud、LocalSend 与 BookOrbit；iCloud 和既有 WebDAV、Google
+   Drive、S3、OneDrive 一样免费开放，不读取会员或配额状态。
+3. TTS 接入上游媒体叠加朗读、离线音频和封面回退改进，但离线下载不恢复 Premium
+   badge 或会员门槛。
+4. 保留自定义 S3 endpoint、加密凭据副本、缺失字段回填、多 provider 同步、书籍自动
+   恢复和生产化诊断。上游新增 BookOrbit 自定义请求头加密同步和字典同步分类可以与其
+   并存。
+5. 保留自建 Supabase、部署级 `0` 表示无限制、自有 updater 端点/公钥和两个活动 fork
+   工作流。上游工作流只更新到禁用目录，没有取得 fork 发布或部署权限。
+6. 上游数据库新增的 `018_add_metadata_updated_at.sql` 与 fork 已发布的
+   `018_add_storage_stats_rpc.sql` 发生版本号碰撞，因此前者改为
+   `019_add_metadata_updated_at.sql`。新装基线同时记录 018/019；现有 017 或 018 环境由
+   `self-hosted/upgrade.sh` 独立、幂等地补齐缺失迁移。
+7. `packages/foliate-js` 与 `packages/tao` 均从 fork 基线纯快进到上游目标提交，保留已有
+   修复的同时获取上游解析、阅读器和平台兼容改进。
+8. fork 不变量测试增加 TTS、集成设置、账户页敏感界面和 019 迁移检查，后续同步一旦
+   恢复会员/IAP 门槛或遗漏新数据库基线会直接失败。
+
+本轮重点引入的上游能力包括 iCloud 文件同步、LocalSend、BookOrbit、EPUB 媒体叠加
+朗读、按字段合并书籍元数据、字典同步分类，以及大量阅读器、OPDS、TTS、Android、
+macOS 和 Web 修复。这些能力仍需通过候选安装包验证，不能仅凭自动合并认定可发布。
+
+截至 2026-08-13 的本地验证：
+
+- `pnpm lint` 与 `pnpm format:check`：通过。
+- `cargo fmt --check`、`cargo clippy -p Readest --no-deps -- -D warnings`：通过；依赖只输出
+  非阻断 warning。
+- Rust 单元测试：104/104 通过。
+- 自建数据库新装与升级生成测试、Shell 语法检查：通过。
+- fork GitHub 脚本与不变量测试：通过。
+- 云同步、设置、TTS、账户、Foliate 等 19 个重点测试文件：287/287 通过。
+- 高并发全量 Vitest 两次分别只剩 1 个测试超时或 worker 启动超时；相关失败文件单独
+  复跑均通过。随后使用正式测试环境并限制单 worker 完成受控全量复跑：712 个测试文件、
+  8988 条测试通过，1 个文件和 10 条测试按预期跳过，0 失败。先前异常确认为本机高负载
+  导致的调度拥塞，不是确定性功能回归。
+- Next.js 16.2.11 Web/API 生产构建通过。首次沙箱内运行因 Turbopack 创建本地进程并
+  绑定端口被系统拒绝；在沙箱外以相同源码和环境重跑后完成编译、类型检查和 31 个静态
+  页面生成。
+- 本机没有 `luajit`，KOReader Lua lint/test 按脚本设计跳过，不记录为通过。
+
+现有自托管部署升级要求：
+
+1. 测试候选 Web/API 前需要部署本分支构建的新候选镜像，避免新客户端与旧 API 代码混用。
+2. Supabase/Pigsty 现有数据库必须先执行标准 PITR 备份
+   `sudo -iu postgres pig pb backup`，成功后再将本提交的 `docker/volumes/db/` 复制到
+   数据库主机。
+3. 运行 `docker/volumes/db/self-hosted/upgrade.sh sudo -iu postgres psql -d postgres -X`
+   应用 019，再运行 `verify.sql`；已有 018 台账不得重跑 bootstrap。
+4. 只有数据库验证、新 Web/API 镜像、Android/macOS 候选真机测试和非发布跨平台 Actions
+   均通过后，才可请求用户授权合并 `master`。本阶段不会创建 `v0.12.1` Release。
 
 ## 4. S3 跨设备“无法打开书籍”调查
 

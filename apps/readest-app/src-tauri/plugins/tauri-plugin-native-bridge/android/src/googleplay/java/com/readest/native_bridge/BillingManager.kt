@@ -270,14 +270,14 @@ class BillingManager(private val activity: Activity) : PurchasesUpdatedListener 
                 val acknowledgePurchaseParams = AcknowledgePurchaseParams.newBuilder()
                     .setPurchaseToken(purchase.purchaseToken)
                     .build()
-                    
+
                 billingClient.acknowledgePurchase(acknowledgePurchaseParams) { billingResult ->
                     if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
                         Log.d(TAG, "Purchase acknowledged")
                     }
                 }
             }
-            
+
             val purchaseData = convertToPurchaseData(purchase, "purchased")
             purchaseCallback?.invoke(purchaseData)
             purchaseCallback = null

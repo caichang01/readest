@@ -6,7 +6,7 @@ import {
   CJK_SANS_SERIF_FONTS,
   CJK_SERIF_FONTS,
 } from '@/services/constants';
-import { ViewSettings } from '@/types/book';
+import { BookFormat, FIXED_LAYOUT_FORMATS, ViewSettings } from '@/types/book';
 import {
   themes,
   Palette,
@@ -15,6 +15,8 @@ import {
   generateDarkPalette,
 } from '@/styles/themes';
 import { createFontCSS, CustomFont } from '@/styles/fonts';
+import { readStoredAmbientIsDarkMode } from './ambientLight';
+import { INLINE_FORMATTING_SELECTOR } from './inlineTags';
 import { getOSPlatform } from './misc';
 import { SCROLL_WRAPPER_CLASS, SCROLL_WRAPPER_FIT_CLASS } from './scrollable';
 
@@ -90,6 +92,16 @@ const getFontStyles = (
 ) => {
   const families = buildFontFamilyLists(serif, sansSerif, monospace, defaultCJKFont);
   const defaultFontFamily = defaultFont.toLowerCase() === 'serif' ? '--serif' : '--sans-serif';
+  // Normalize publisher body-copy sizes (the Readium CSS element set) so the
+  // configured font size applies even when the book sets explicit sizes on its
+  // paragraphs (#5420). Opt-in via "Override Book Font" since it also flattens
+  // intentional sizing on these elements. Fixed layouts are unaffected: their
+  // renderer has no setStyles, so this is only injected into reflowable docs.
+  const bodyFontSizeOverride = `
+    p, li, div, pre, dd {
+      font-size: max(1rem, var(--min-font-size, 8px)) !important;
+    }
+  `;
   const fontStyles = `
     html {
       --serif: ${families.serif};
@@ -145,6 +157,7 @@ const getFontStyles = (
     body *:not(pre, code, kbd, .code):not(pre *, code *, kbd *, .code *) {
       ${overrideFont ? 'font-family: revert !important;' : ''}
     }
+    ${overrideFont ? bodyFontSizeOverride : ''}
   `;
   return fontStyles;
 };
@@ -558,7 +571,13 @@ const getParagraphLayoutStyles = (
       text-align: unset;
       hyphens: unset;
   }
-  p, blockquote, dd, div:not(:has(*:not(b, a, em, i, strong, u, span))) {
+  /* The div clause treats a div as paragraph-like only when every descendant is
+     inline formatting (INLINE_FORMATTING_TAGS). Anything injected into a book
+     paragraph at runtime — the translation target, its preserved markup, the
+     a11y skip link — must use a tag from that list, or the enclosing div drops
+     this whole rule and reverts to the book's default line spacing, indent and
+     hyphenation. */
+  p, blockquote, dd, div:not(:has(*:not(${INLINE_FORMATTING_SELECTOR}))) {
     line-height: ${lineSpacing} ${overrideLayout ? '!important' : ''};
     word-spacing: ${wordSpacing}px ${overrideLayout ? '!important' : ''};
     letter-spacing: ${letterSpacing}px ${overrideLayout ? '!important' : ''};
@@ -728,6 +747,11 @@ const getTranslationStyles = (showSource: boolean) => `
   }
   .translation-target {
   }
+  /* The original is wrapped rather than erased so its CFIs stay resolvable;
+     cfi-skip keeps the wrapper invisible to CFI indexing. */
+  .translation-source-hidden {
+    display: none !important;
+  }
   .translation-target.hidden {
     display: none !important;
   }
@@ -809,14 +833,22 @@ export const getThemeCode = () => {
   let themeMode = 'auto';
   let themeColor = 'default';
   let systemIsDarkMode = false;
+  let ambientIsDarkMode = false;
   let customThemes: CustomTheme[] = [];
   if (typeof window !== 'undefined') {
     themeColor = localStorage.getItem('themeColor') || 'default';
     themeMode = localStorage.getItem('themeMode') || 'auto';
     systemIsDarkMode = localStorage.getItem('systemIsDarkMode') === 'true';
+    ambientIsDarkMode = readStoredAmbientIsDarkMode(
+      localStorage.getItem('ambientIsDarkMode'),
+      systemIsDarkMode,
+    );
     customThemes = JSON.parse(localStorage.getItem('customThemes') || '[]');
   }
-  const isDarkMode = themeMode === 'dark' || (themeMode === 'auto' && systemIsDarkMode);
+  const isDarkMode =
+    themeMode === 'dark' ||
+    (themeMode === 'auto' && systemIsDarkMode) ||
+    (themeMode === 'ambient' && ambientIsDarkMode);
   let currentTheme = themes.find((theme) => theme.name === themeColor);
   if (!currentTheme) {
     const customTheme = customThemes.find((theme) => theme.name === themeColor);
@@ -949,7 +981,18 @@ export const applyTranslationStyle = (viewSettings: ViewSettings) => {
   document.head.appendChild(styleElement);
 };
 
-export const transformStylesheet = (css: string, vw: number, vh: number, vertical: boolean) => {
+export const transformStylesheet = (
+  css: string,
+  vw: number,
+  vh: number,
+  vertical: boolean,
+  isFixedLayout = false,
+) => {
+  // Fixed-layout pages are authored against their own viewport: rescaling font
+  // sizes, resolving vw/vh against the reader viewport or repainting colors
+  // breaks the authored page. Leave them exactly as the book wrote them (#5649).
+  if (isFixedLayout) return css;
+
   const isMobile = ['ios', 'android'].includes(getOSPlatform());
   const fontScale = isMobile ? 1.25 : 1;
   const isInlineStyle = !css.includes('{');
@@ -1274,11 +1317,17 @@ export const applyFixedlayoutStyles = (
   document: Document,
   viewSettings: ViewSettings,
   themeCode?: ThemeCode,
+  format?: BookFormat,
 ) => {
   if (!themeCode) {
     themeCode = getThemeCode();
   }
   const { bg, fg, primary, isDarkMode } = themeCode;
+  // PDF and comic pages are rendered by the app, so they take the theme colors.
+  // Fixed-layout EPUB pages are authored by the book: theming the page repaints
+  // the background the book drew and, because a dark color scheme also swaps the
+  // browser default text color, recolors text the book never colored (#5649).
+  const appRendered = !format || FIXED_LAYOUT_FORMATS.has(format);
   const isEink = viewSettings.isEink;
   const overrideColor = viewSettings.overrideColor!;
   const invertImgColorInDark = viewSettings.invertImgColorInDark!;
@@ -1300,11 +1349,15 @@ export const applyFixedlayoutStyles = (
       --theme-bg-color: ${bg};
       --theme-fg-color: ${fg};
       --theme-primary-color: ${primary};
-      color-scheme: ${isDarkMode ? 'dark' : 'light'};
+      color-scheme: ${appRendered && isDarkMode ? 'dark' : 'light'};
+      /* Chrome for Android's text autosizing rescales line metrics and shifts
+         absolutely positioned per-letter text in fixed-layout books (#5641). */
+      -webkit-text-size-adjust: none;
+      text-size-adjust: none;
     }
     body {
       position: relative;
-      background-color: var(--theme-bg-color);
+      ${appRendered ? 'background-color: var(--theme-bg-color);' : ''}
     }
     ${isEink ? getEinkSelectionStyles() : ''}
     #canvas {

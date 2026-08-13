@@ -38,12 +38,16 @@ assert_not_contains() {
 assert_contains '\set ON_ERROR_STOP on'
 assert_contains '20260727_self_hosted_baseline_017'
 assert_contains '20260727_self_hosted_baseline_018'
+assert_contains '20260813_self_hosted_baseline_019'
 assert_contains '018_add_storage_stats_rpc'
 assert_contains "\\echo 'Applying 018_add_storage_stats_rpc.sql...'"
 assert_contains 'CREATE OR REPLACE FUNCTION public.get_storage_by_book_hash(p_user_id uuid)'
 assert_contains 'REVOKE ALL ON FUNCTION public.get_storage_by_book_hash(uuid) FROM PUBLIC'
 assert_contains 'GRANT SELECT ON public.files TO service_role'
 assert_contains 'GRANT EXECUTE ON FUNCTION public.get_storage_by_book_hash(uuid) TO service_role'
+assert_contains '019_add_metadata_updated_at'
+assert_contains "\\echo 'Applying 019_add_metadata_updated_at.sql...'"
+assert_contains 'ADD COLUMN IF NOT EXISTS metadata_updated_at timestamp with time zone NULL'
 assert_contains "NOTIFY pgrst, 'reload schema'"
 assert_contains 'Readest self-hosted migrations are already current; no changes made.'
 assert_contains "RAISE EXCEPTION 'Readest migration ledger is missing"
@@ -62,6 +66,8 @@ assert_verify_contains() {
 
 assert_verify_contains "to_regprocedure('public.get_storage_by_book_hash(uuid)')"
 assert_verify_contains "'018_add_storage_stats_rpc'"
+assert_verify_contains "'019_add_metadata_updated_at'"
+assert_verify_contains "column_name = 'metadata_updated_at'"
 assert_verify_contains "'service_role'"
 assert_verify_contains "acl.privilege_type = 'EXECUTE'"
 assert_verify_contains "has_table_privilege('service_role', 'public.files', 'SELECT')"

@@ -6,9 +6,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DB_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 INIT_SCHEMA="$DB_DIR/init/schema.sql"
 MIGRATIONS_DIR="$DB_DIR/migrations"
-BASELINE_VERSION="20260727_self_hosted_baseline_018"
+BASELINE_VERSION="20260813_self_hosted_baseline_019"
 PREVIOUS_BASELINE_VERSION="20260727_self_hosted_baseline_017"
 STORAGE_STATS_MIGRATION_VERSION="018_add_storage_stats_rpc"
+METADATA_MIGRATION_VERSION="019_add_metadata_updated_at"
 
 if [[ ! -f "$INIT_SCHEMA" ]]; then
   echo "Missing base schema: $INIT_SCHEMA" >&2
@@ -48,6 +49,7 @@ emit_sql() {
 \set ON_ERROR_STOP on
 \set baseline_version '$BASELINE_VERSION'
 \set storage_stats_migration_version '$STORAGE_STATS_MIGRATION_VERSION'
+\set metadata_migration_version '$METADATA_MIGRATION_VERSION'
 
 SELECT to_regclass('readest_internal.schema_migrations') IS NOT NULL
   AS ledger_exists
@@ -327,13 +329,19 @@ CREATE TABLE IF NOT EXISTS readest_internal.schema_migrations (
 INSERT INTO readest_internal.schema_migrations (version, description)
 VALUES (
   :'baseline_version',
-  'Readest self-hosted Supabase baseline through migration 018'
+  'Readest self-hosted Supabase baseline through migration 019'
 );
 
 INSERT INTO readest_internal.schema_migrations (version, description)
 VALUES (
   :'storage_stats_migration_version',
   'Add service-role storage statistics aggregation RPC'
+);
+
+INSERT INTO readest_internal.schema_migrations (version, description)
+VALUES (
+  :'metadata_migration_version',
+  'Add metadata conflict-resolution timestamp to books'
 );
 
 NOTIFY pgrst, 'reload schema';

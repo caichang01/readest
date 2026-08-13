@@ -20,8 +20,8 @@ The following historical migrations are intentionally not replayed:
   trigger are already represented in `schema.sql`.
 
 The assembled baseline runs in one transaction. It records
-`20260727_self_hosted_baseline_018` and the folded
-`018_add_storage_stats_rpc` migration in
+`20260813_self_hosted_baseline_019` and the folded
+`018_add_storage_stats_rpc` and `019_add_metadata_updated_at` migrations in
 `readest_internal.schema_migrations`. A repeated run exits successfully
 without changing the database. If Readest tables exist without that record,
 the script stops instead of guessing whether the database is partially
@@ -31,6 +31,11 @@ Migration 018 adds `public.get_storage_by_book_hash(uuid)`, the storage-manager
 aggregation RPC used by the Readest API. It returns camelCase PostgREST fields,
 excludes soft-deleted files, runs as `SECURITY INVOKER`, and is executable only
 by `service_role`.
+
+Migration 019 adds the nullable `public.books.metadata_updated_at` column used
+to resolve metadata edits independently from reading-progress updates. The
+upstream file originally used number 018; this fork renumbers it to 019 because
+018 is already part of the deployed self-hosted migration ledger.
 
 ## Prerequisites
 
@@ -59,7 +64,7 @@ sudo -iu postgres psql -d postgres -X -v ON_ERROR_STOP=1 \
   < docker/volumes/db/self-hosted/verify.sql
 ```
 
-## Upgrade an existing baseline 017 deployment
+## Upgrade an existing baseline 017 or 018 deployment
 
 Take a PostgreSQL backup first. Do not rerun `bootstrap.sh` against the existing
 Readest tables.
@@ -84,14 +89,16 @@ docker/volumes/db/self-hosted/upgrade.sh \
   sudo -iu postgres psql -d postgres -X
 ```
 
-The upgrade runner accepts baseline 017 or 018, checks the migration ledger,
-applies only unapplied forward migrations in their own transaction, records
-`018_add_storage_stats_rpc`, and notifies PostgREST to reload its schema cache.
+The upgrade runner accepts baseline 017, 018, or 019, checks the migration ledger,
+applies only unapplied forward migrations in one transaction, records
+`018_add_storage_stats_rpc` and `019_add_metadata_updated_at` as needed, and
+notifies PostgREST to reload its schema cache.
 A repeated run exits successfully without changing the database.
 
-Run `verify.sql` afterward. It checks the RPC signature, migration record,
-absence of `PUBLIC` execute permission, and the `service_role` function and
-table grants in addition to the existing table, RLS, and replica checks.
+Run `verify.sql` afterward. It checks both migration records, the metadata
+column, the RPC signature, absence of `PUBLIC` execute permission, and the
+`service_role` function and table grants in addition to the existing table,
+RLS, and replica checks.
 
 Before applying to any non-empty deployment, take a PostgreSQL backup and
 inspect the existing schema. Do not use the fresh-install baseline as an
