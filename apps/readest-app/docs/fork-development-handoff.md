@@ -855,6 +855,22 @@ macOS 和 Web 修复。这些能力仍需通过候选安装包验证，不能仅
 4. 只有数据库验证、新 Web/API 镜像、Android/macOS 候选真机测试和非发布跨平台 Actions
    均通过后，才可请求用户授权合并 `master`。本阶段不会创建 `v0.12.1` Release。
 
+2026-08-13 候选流水线结果：
+
+- 最终候选提交为 `20ca889ca42e46aa3d47542981671cded4e27752`，已推送至
+  `origin/codex/upstream-sync-20260813`。
+- `Fork Web and API Image` run
+  [`31665573907`](https://github.com/caichang01/readest/actions/runs/31665573907) 成功；只发布
+  当前提交对应的 `sha-*` GHCR 候选标签，没有更新 `master` 或 `latest`。
+- `Fork Release Installers` run
+  [`31665590057`](https://github.com/caichang01/readest/actions/runs/31665590057) 以
+  `publish_release=false` 成功。Android、macOS Universal、Windows x64/ARM64、Linux
+  x64/ARM64 六个构建任务均完成签名、收集和 artifact 上传；Publish GitHub Release
+  作业按预期跳过，没有创建或覆盖 `v0.12.1` Release。
+- 六组候选 artifacts 均以完整提交 SHA 命名，保留至 2026-09-12。它们证明构建链通过，
+  但仍不能替代数据库迁移、候选 Web/API 部署以及 Android/macOS 账户、同步、阅读器和
+  更新检查真机验收。
+
 ## 4. S3 跨设备“无法打开书籍”调查
 
 ### 4.1 用户现象
