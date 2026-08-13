@@ -1,5 +1,5 @@
-node-major=$(node -p "Number(process.versions.node.split('.')[0])")
-if [ "$node-major" -lt 20 ]; then
+node_major=$(node -p "Number(process.versions.node.split('.')[0])")
+if [ "$node_major" -lt 20 ]; then
   echo "Node.js 20 or newer is required for Readest pre-push checks (current: $(node -v))." >&2
   exit 1
 fi
