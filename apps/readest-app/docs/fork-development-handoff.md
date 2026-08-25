@@ -855,6 +855,12 @@ macOS 和 Web 修复。这些能力仍需通过候选安装包验证，不能仅
 4. 只有数据库验证、新 Web/API 镜像、Android/macOS 候选真机测试和非发布跨平台 Actions
    均通过后，才可请求用户授权合并 `master`。本阶段不会创建 `v0.12.1` Release。
 
+为避免再次在数据库服务器执行 `git clone`，新增本机入口
+`docker/volumes/db/self-hosted/deploy-remote-upgrade.sh`。它要求显式传入
+`--backup-completed`，通过 SSH/SCP 上传 018/019 与必要的升级、验证文件，然后在远端
+依次运行 `upgrade.sh` 和 `verify.sql`；它不会执行备份或 `bootstrap.sh`。模拟远端命令的
+回归测试已加入 `pnpm test:self-hosted-db`。
+
 2026-08-13 候选流水线结果：
 
 - 最终候选提交为 `20ca889ca42e46aa3d47542981671cded4e27752`，已推送至

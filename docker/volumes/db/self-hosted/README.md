@@ -100,6 +100,35 @@ column, the RPC signature, absence of `PUBLIC` execute permission, and the
 `service_role` function and table grants in addition to the existing table,
 RLS, and replica checks.
 
+### Upload and upgrade from a workstation
+
+When the repository is on a local workstation rather than the Pigsty server,
+run the supplied SSH/SCP helper from the repository root after the managed
+backup has completed successfully:
+
+```bash
+docker/volumes/db/self-hosted/deploy-remote-upgrade.sh \
+  --host rockyadmin@database-server \
+  --backup-completed
+```
+
+Replace `rockyadmin@database-server` with an SSH config alias or the actual
+`USER@HOST`. Use `--port PORT` for a non-default SSH port. By default the helper
+creates a timestamped `readest-db-019-*` directory below the remote user's home
+directory; `--remote-dir /absolute/path` can select another safe staging path.
+
+The helper:
+
+1. refuses to proceed without the explicit `--backup-completed` acknowledgement;
+2. uploads only migrations 018/019, `upgrade.sh`, and `verify.sql`;
+3. runs the forward upgrade as the PostgreSQL operating-system user;
+4. runs the independent verification with `ON_ERROR_STOP=1`;
+5. retains the remote staging directory for audit or repeat verification.
+
+It deliberately does not execute the backup command and never invokes
+`bootstrap.sh`. SSH may prompt for the remote login key/password, and `sudo` may
+prompt according to the server policy.
+
 Before applying to any non-empty deployment, take a PostgreSQL backup and
 inspect the existing schema. Do not use the fresh-install baseline as an
 upgrade mechanism.
@@ -113,6 +142,7 @@ live-data or already-folded migrations from the baseline:
 ```bash
 docker/volumes/db/self-hosted/test-bootstrap.sh
 docker/volumes/db/self-hosted/test-upgrade.sh
+docker/volumes/db/self-hosted/test-deploy-remote-upgrade.sh
 ```
 
 The same test is available from the repository root:
