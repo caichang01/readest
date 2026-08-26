@@ -1,6 +1,6 @@
 # Readest fork 二次开发交接记录
 
-最后更新：2026-08-13
+最后更新：2026-08-26
 
 这份文档记录本 fork 相对上游 Readest 的产品目标、已经完成的改造、验证结果、已知问题和后续计划。开始新的 fork 专属开发前，应先阅读本文；完成一个阶段后，应同步更新日期、提交、测试结果和未完成事项。
 
@@ -842,7 +842,8 @@ macOS 和 Web 修复。这些能力仍需通过候选安装包验证，不能仅
   Supabase/Jsdom 不兼容，后者在本机造成 worker 启动超时。hook 现明确拒绝 Node 20
   以下运行时，并在保持全部测试文件覆盖的前提下使用单 worker；对应契约测试防止以后
   回退到不稳定配置。
-- 本机没有 `luajit`，KOReader Lua lint/test 按脚本设计跳过，不记录为通过。
+- 补齐 LuaJIT/LuaRocks/Busted/SQLite Lua 工具链后，以 `CI=1` 运行 KOReader 插件检查：
+  49 个 Lua 文件语法检查通过，21 个 spec 文件共 292 条测试通过，0 失败、0 错误。
 
 现有自托管部署升级要求：
 
@@ -881,6 +882,17 @@ macOS 和 Web 修复。这些能力仍需通过候选安装包验证，不能仅
 - 六组候选 artifacts 均以完整提交 SHA 命名，保留至 2026-09-12。它们证明构建链通过，
   但仍不能替代数据库迁移、候选 Web/API 部署以及 Android/macOS 账户、同步、阅读器和
   更新检查真机验收。
+
+2026-08-26 真实环境验收与合并授权：
+
+- 用户确认 pgBackRest/PITR 备份已完成，随后通过修复后的远端升级脚本成功应用
+  `019_add_metadata_updated_at`。迁移在单个事务中提交并通知 PostgREST 刷新 schema。
+- 独立 `verify.sql` 通过：迁移台账包含 017 基线、018 存储统计 RPC 和 019 元数据时间戳；
+  实际环境为 1 个 Auth 用户、12 张 Readest 业务表和 44 条 RLS policy。
+- 候选 Web/API、Android、macOS、账户登录、云同步、自定义 S3、书籍打开及其他约定的
+  基本功能均由用户确认通过；六平台构建矩阵和补齐后的 Lua 验证也已通过。
+- 用户明确授权将 `codex/upstream-sync-20260813` 以普通 merge commit 合并到 `master`。
+  应用版本为 `0.12.1`；推送 `master` 后由 fork 流水线按版本变化规则创建正式 Release。
 
 ## 4. S3 跨设备“无法打开书籍”调查
 
