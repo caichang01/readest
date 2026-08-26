@@ -32,6 +32,22 @@ test('membership, quota, payment, and IAP implementations stay removed', () => {
 
   const accessPolicy = readFromRoot('apps/readest-app/src/utils/access.ts');
   assert.doesNotMatch(accessPolicy, /\b(?:membership|premium|subscription|planType)\b/i);
+
+  const ungatedSurfaces = [
+    'apps/readest-app/src/app/reader/components/tts/TTSPlayerSheet.tsx',
+    'apps/readest-app/src/components/settings/IntegrationsPanel.tsx',
+    'apps/readest-app/src/app/user/page.tsx',
+    'apps/readest-app/src/app/user/components/AccountActions.tsx',
+  ];
+
+  for (const path of ungatedSurfaces) {
+    const source = readFromRoot(path);
+    assert.doesNotMatch(
+      source,
+      /\b(?:useQuotaStats|isCloudSyncAllowed|isTTSCacheAllowed|Premium|PlansComparison|hasIAP)\b/,
+      `${path} must not restore membership or IAP gates`,
+    );
+  }
 });
 
 test('self-hosted deployment, S3 recovery, and updater trust assets remain present', () => {
@@ -46,6 +62,7 @@ test('self-hosted deployment, S3 recovery, and updater trust assets remain prese
     'apps/readest-app/src/utils/diagnosticLog.ts',
     'docker/compose.external-supabase.yaml',
     'docker/volumes/db/migrations/018_add_storage_stats_rpc.sql',
+    'docker/volumes/db/migrations/019_add_metadata_updated_at.sql',
     'docker/volumes/db/self-hosted/verify.sql',
   ];
 

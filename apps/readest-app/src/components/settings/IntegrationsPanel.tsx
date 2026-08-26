@@ -4,16 +4,19 @@ import { useRouter } from 'next/navigation';
 import { MdChevronRight } from 'react-icons/md';
 import {
   RiBookOpenLine,
+  RiPlanetLine,
   RiRssLine,
   RiBookReadLine,
   RiBook3Line,
   RiDiscordLine,
   RiSendPlaneLine,
+  RiWifiLine,
   RiCloudLine,
   RiCloudFill,
   RiDatabase2Line,
   RiGoogleLine,
   RiMicrosoftLine,
+  RiAppleLine,
 } from 'react-icons/ri';
 import { useEnv } from '@/context/EnvContext';
 import { useAuth } from '@/context/AuthContext';
@@ -24,17 +27,23 @@ import { useCustomOPDSStore } from '@/store/customOPDSStore';
 import { useFileSyncStore } from '@/store/fileSyncStore';
 import { CatalogManager } from '@/app/opds/components/CatalogManager';
 import { saveSysSettings } from '@/helpers/settings';
-import { isWebAppPlatform } from '@/services/environment';
+import { isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
+import { isLocalSendEnabled } from '@/services/localsend/devicePrefs';
 import { getGoogleWebClientId } from '@/services/sync/providers/gdrive/buildGoogleDriveProvider';
 import { getMicrosoftClientId } from '@/services/sync/providers/onedrive/buildOneDriveProvider';
+import { isICloudSupportedPlatform } from '@/services/sync/providers/icloud/buildICloudProvider';
+import { getICloudContainerStatus } from '@/utils/bridge';
 import { navigateToLogin, navigateToProfile } from '@/utils/nav';
+import BookOrbitForm from './integrations/BookOrbitForm';
 import KOSyncForm from './integrations/KOSyncForm';
 import ReadwiseForm from './integrations/ReadwiseForm';
 import HardcoverForm from './integrations/HardcoverForm';
 import SendToReadestForm from './integrations/SendToReadestForm';
+import LocalSendForm from './integrations/LocalSendForm';
 import WebDAVForm from './integrations/WebDAVForm';
 import GoogleDriveForm from './integrations/GoogleDriveForm';
 import OneDriveForm from './integrations/OneDriveForm';
+import ICloudForm from './integrations/ICloudForm';
 import S3Form from './integrations/S3Form';
 import { persistCloudProviderEnabled } from './integrations/cloudSync';
 import {
@@ -56,15 +65,18 @@ import { BoxedList, NavigationRow, SectionTitle, SettingLabel, Tips } from './pr
 
 type SubPage =
   | 'kosync'
+  | 'bookorbit'
   | 'webdav'
   | 'gdrive'
   | 's3'
   | 'onedrive'
+  | 'icloud'
   | 'readest-cloud'
   | 'readwise'
   | 'hardcover'
   | 'opds'
   | 'send'
+  | 'localsend'
   | null;
 
 /**
@@ -98,6 +110,17 @@ const IntegrationsPanel: React.FC = () => {
   const gdriveLastError = useFileSyncStore((s) => s.lastErrorByKind.gdrive);
   const s3LastError = useFileSyncStore((s) => s.lastErrorByKind.s3);
   const onedriveLastError = useFileSyncStore((s) => s.lastErrorByKind.onedrive);
+  const isICloudSyncing = useFileSyncStore((s) => s.byKind.icloud?.isSyncing ?? false);
+  const icloudLastError = useFileSyncStore((s) => s.lastErrorByKind.icloud);
+  // "Configured" for iCloud = the container is reachable (an entitled build
+  // with an iCloud session). Probed once; Apple Tauri platforms only.
+  const [icloudAvailable, setICloudAvailable] = useState(false);
+  useEffect(() => {
+    if (!isICloudSupportedPlatform()) return;
+    getICloudContainerStatus()
+      .then((s) => setICloudAvailable(!!s.available && !!s.documentsPath))
+      .catch(() => setICloudAvailable(false));
+  }, []);
   const [subPage, setSubPage] = useState<SubPage>(null);
 
   // Hydrate the OPDS store from settings so the row's catalog count is
@@ -139,14 +162,17 @@ const IntegrationsPanel: React.FC = () => {
     if (!requestedSubPage) return;
     if (
       requestedSubPage === 'kosync' ||
+      requestedSubPage === 'bookorbit' ||
       requestedSubPage === 'webdav' ||
       requestedSubPage === 'gdrive' ||
       requestedSubPage === 's3' ||
       requestedSubPage === 'onedrive' ||
+      requestedSubPage === 'icloud' ||
       requestedSubPage === 'readwise' ||
       requestedSubPage === 'hardcover' ||
       requestedSubPage === 'opds' ||
-      requestedSubPage === 'send'
+      requestedSubPage === 'send' ||
+      requestedSubPage === 'localsend'
     ) {
       setSubPage(requestedSubPage);
     } else if (requestedSubPage === 'cloudsync') {
@@ -164,6 +190,18 @@ const IntegrationsPanel: React.FC = () => {
     return (
       <div className='my-4 w-full'>
         <KOSyncForm onBack={() => setSubPage(null)} />
+      </div>
+    );
+  if (subPage === 'localsend')
+    return (
+      <div className='my-4 w-full'>
+        <LocalSendForm onBack={() => setSubPage(null)} />
+      </div>
+    );
+  if (subPage === 'bookorbit')
+    return (
+      <div className='my-4 w-full'>
+        <BookOrbitForm onBack={() => setSubPage(null)} />
       </div>
     );
   if (subPage === 'webdav')
@@ -300,6 +338,36 @@ const IntegrationsPanel: React.FC = () => {
         )}
       </div>
     );
+  if (subPage === 'icloud')
+    return (
+      <div className='my-4 w-full'>
+        <SubPageHeader
+          parentLabel={_('Integrations')}
+          currentLabel={_('iCloud')}
+          description={_(
+            'Sync your library, reading progress, and highlights with your iCloud Drive.',
+          )}
+          onBack={() => setSubPage(null)}
+        />
+        <ICloudForm />
+        {settings.icloud?.enabled && (
+          <div className='mt-5'>
+            <Tips>
+              <li>
+                {_('{{provider}} keeps a full copy of your books, progress, and annotations.', {
+                  provider: _('iCloud'),
+                })}
+              </li>
+              <li>
+                {_(
+                  'App settings, reading statistics, and dictionaries still sync through your Readest account while signed in.',
+                )}
+              </li>
+            </Tips>
+          </div>
+        )}
+      </div>
+    );
   if (subPage === 'readest-cloud')
     return (
       <div className='my-4 w-full'>
@@ -355,12 +423,18 @@ const IntegrationsPanel: React.FC = () => {
       : _('Connected')
     : _('Not connected');
 
+  const bookOrbitStatus = settings.bookorbit?.enabled
+    ? settings.bookorbit.username
+      ? _('Connected as {{user}}', { user: settings.bookorbit.username })
+      : _('Connected')
+    : _('Not connected');
+
   const readwiseStatus = settings.readwise?.enabled ? _('Connected') : _('Not connected');
   const hardcoverStatus = settings.hardcover?.enabled ? _('Connected') : _('Not connected');
 
   // Cloud sync providers are independently selectable (#5062): any subset of
-  // {Readest Cloud, WebDAV, Google Drive, S3, OneDrive} can sync the library
-  // at once. A "configured" third-party provider (WebDAV creds / a Drive
+  // {Readest Cloud, WebDAV, Google Drive, S3, OneDrive, iCloud} can sync the
+  // library at once. A "configured" third-party provider (WebDAV creds / a Drive
   // token) can be switched on inline; an unconfigured one must be opened to
   // connect.
   const providers = getCloudSyncProviders(settings);
@@ -422,6 +496,15 @@ const IntegrationsPanel: React.FC = () => {
     syncBooks: settings.onedrive?.syncBooks ?? false,
     booksBackedUpElsewhere: booksBackedUpBy('onedrive'),
   });
+  const icloudStatus = getThirdPartyRowStatus(_, {
+    enabled: !!settings.icloud?.enabled,
+    configured: icloudAvailable,
+    syncing: isICloudSyncing,
+    paused: cloudGate.paused,
+    lastError: icloudLastError,
+    syncBooks: settings.icloud?.syncBooks ?? false,
+    booksBackedUpElsewhere: booksBackedUpBy('icloud'),
+  });
   const readestStatus = getReadestCloudRowStatus(_, {
     signedIn: !!user,
     enabled: readestEnabled,
@@ -452,6 +535,12 @@ const IntegrationsPanel: React.FC = () => {
               title={_('KOReader')}
               status={koSyncStatus}
               onClick={() => setSubPage('kosync')}
+            />
+            <IntegrationRow
+              icon={RiPlanetLine}
+              title={_('BookOrbit')}
+              status={bookOrbitStatus}
+              onClick={() => setSubPage('bookorbit')}
             />
             <IntegrationRow
               icon={RiBookReadLine}
@@ -551,6 +640,21 @@ const IntegrationsPanel: React.FC = () => {
                 toggleLabel={_('Sync with OneDrive')}
               />
             )}
+            {(appService?.isIOSApp || appService?.isMacOSApp) && (
+              <CloudProviderRow
+                icon={RiAppleLine}
+                title={_('iCloud')}
+                status={icloudStatus}
+                checked={!!settings.icloud?.enabled}
+                canToggle={canToggleCloudProvider({
+                  isConfigured: icloudAvailable,
+                  isEnabled: !!settings.icloud?.enabled,
+                })}
+                onToggle={(next) => toggleCloudProvider('icloud', next)}
+                onOpen={() => setSubPage('icloud')}
+                toggleLabel={_('Sync with iCloud')}
+              />
+            )}
           </div>
         </div>
         {providers.length === 0 && (
@@ -587,6 +691,14 @@ const IntegrationsPanel: React.FC = () => {
               status={_('Email books to your library')}
               onClick={() => setSubPage('send')}
             />
+            {isTauriAppPlatform() && (
+              <IntegrationRow
+                icon={RiWifiLine}
+                title={_('LocalSend')}
+                status={isLocalSendEnabled() ? _('On') : _('Off')}
+                onClick={() => setSubPage('localsend')}
+              />
+            )}
           </div>
         </div>
       </div>

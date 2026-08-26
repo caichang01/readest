@@ -51,8 +51,13 @@ const ProfilePage = () => {
 
   useTheme({ systemUIVisible: false });
 
-  const { handleLogout, handleResetPassword, handleUpdateEmail, handleConfirmDelete } =
-    useUserActions();
+  const {
+    handleLogout,
+    handleResetPassword,
+    handleUpdateEmail,
+    handleConfirmDelete,
+    handleDeleteAllBooks,
+  } = useUserActions();
 
   const handleGoBack = () => {
     if (showStorageManager) {
@@ -69,6 +74,13 @@ const ProfilePage = () => {
 
   const handleDeleteWithMessage = () => {
     handleConfirmDelete(_('Failed to delete user. Please try again later.'));
+  };
+
+  const handleDeleteAllBooksWithMessage = () => {
+    handleDeleteAllBooks(
+      _('All books deleted.'),
+      _('Failed to delete books. Please try again later.'),
+    );
   };
 
   const handleManageStorage = () => {
@@ -142,6 +154,7 @@ const ProfilePage = () => {
                     onResetPassword={handleResetPassword}
                     onUpdateEmail={handleUpdateEmail}
                     onConfirmDelete={handleDeleteWithMessage}
+                    onConfirmDeleteAllBooks={handleDeleteAllBooksWithMessage}
                     onManageStorage={handleManageStorage}
                     onManageSharedLinks={handleManageSharedLinks}
                     onManageSync={handleManageSync}

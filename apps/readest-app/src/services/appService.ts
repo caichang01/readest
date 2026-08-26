@@ -66,6 +66,7 @@ export abstract class BaseAppService implements AppService {
   hasUpdater = false;
   hasOrientationLock = false;
   hasScreenBrightness = false;
+  hasAmbientLightSensor = false;
   canCustomizeRootDir = false;
   canReadExternalDir = false;
   supportsCanvasContext2DFilter = true;
@@ -106,6 +107,18 @@ export abstract class BaseAppService implements AppService {
     base: BaseDir,
     opts?: DatabaseOpts,
   ): Promise<DatabaseService>;
+
+  // Databases live at the resolved fs path on native and node; the web app
+  // overrides both because its databases live in OPFS under flattened names,
+  // invisible to the IndexedDB-backed fs layer.
+  async databaseExists(path: string, base: BaseDir): Promise<boolean> {
+    return this.fs.exists(path, base);
+  }
+
+  async deleteDatabase(path: string, base: BaseDir): Promise<void> {
+    await this.fs.removeFile(path, base).catch(() => {});
+    await this.fs.removeFile(`${path}-wal`, base).catch(() => {});
+  }
 
   protected async runMigrations(
     lastMigrationVersion: number,
@@ -206,8 +219,8 @@ export abstract class BaseAppService implements AppService {
     return prefix ? `${prefix}/${path}` : path;
   }
 
-  async readDirectory(path: string, base: BaseDir): Promise<FileItem[]> {
-    return await this.fs.readDir(path, base);
+  async readDirectory(path: string, base: BaseDir, extensions?: string[]): Promise<FileItem[]> {
+    return await this.fs.readDir(path, base, extensions);
   }
 
   async exists(path: string, base: BaseDir): Promise<boolean> {
@@ -329,6 +342,7 @@ export abstract class BaseAppService implements AppService {
     handleProgress: ProgressHandler,
     hash: string,
     temp: boolean = false,
+    media?: string,
   ) {
     return CloudSvc.uploadFileToCloud(
       this.fs,
@@ -339,6 +353,7 @@ export abstract class BaseAppService implements AppService {
       handleProgress,
       hash,
       temp,
+      media,
     );
   }
 

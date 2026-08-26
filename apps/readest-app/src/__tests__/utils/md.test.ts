@@ -9,7 +9,13 @@ import { getIndexFromCfi } from '@/utils/cfi';
 // declare. Cast to this richer shape in tests to exercise them.
 type MdBook = BookDoc & {
   toc: NonNullable<BookDoc['toc']>;
-  sections: Array<BookDoc['sections'][number] & { load: () => string }>;
+  sections: Array<
+    BookDoc['sections'][number] & {
+      load: () => string;
+      loadContent?: () => Promise<string>;
+      unload?: () => void;
+    }
+  >;
   resolveHref: (
     href: string,
   ) => { index: number; anchor: (doc: Document) => Element | null } | null;
@@ -162,14 +168,25 @@ describe('makeMarkdownBook', () => {
     expect(doc.querySelector('h1')?.getAttribute('id')).toBeTruthy();
   });
 
-  it('resolves the title from frontmatter, then first H1, then filename', async () => {
+  it('resolves the title from frontmatter, then the filename', async () => {
     const fm = await make('---\ntitle: From Front\nauthor: Jane Doe\n---\n\n# Ignored\n');
     expect(fm.metadata.title).toBe('From Front');
     expect(fm.metadata.author).toBe('Jane Doe');
-    const h1 = await make('# The Heading\n\nbody\n');
-    expect(h1.metadata.title).toBe('The Heading');
     const fn = await make('just text\n', 'My Notes.md');
     expect(fn.metadata.title).toBe('My Notes');
+  });
+
+  // A heading is body content, not metadata: only frontmatter — an explicit
+  // metadata block — may override the name the user gave the file. Taking the
+  // first H1 instead made `demo.md` import as "按顺序总结", and every note whose
+  // first line is a heading landed in the library under that heading.
+  it('titles the book after the file, not the first heading', async () => {
+    const h1 = await make('# The Heading\n\nbody\n', 'demo.md');
+    expect(h1.metadata.title).toBe('demo');
+    // The H1 is picked by tag name, not position, so a later one hijacked the
+    // title even when the document opened with an H2.
+    const laterH1 = await make('## Intro\n\n# Buried Heading\n\nbody\n', 'Reading Notes.markdown');
+    expect(laterH1.metadata.title).toBe('Reading Notes');
   });
 
   // Issue #5279: the two frontmatter shapes the reporter attached, each pairing
@@ -264,6 +281,74 @@ describe('makeMarkdownBook', () => {
       url.createObjectURL = origCreate;
       url.revokeObjectURL = origRevoke;
     }
+  });
+});
+
+// #5406 follow-up: MD books get the same transformTarget 'data' pipeline as
+// EPUB/MOBI, so display transformers (proofread, simplecc, punctuation, ...)
+// apply to Markdown books too. The paginator renders `loadContent()` via
+// srcdoc when it is defined, so the transformed content is what gets shown.
+describe('makeMarkdownBook display transforms', () => {
+  // Mirrors FoliateViewer's getDocTransformHandler contract: replace
+  // detail.data with a promise of the transformed markup, or '' on error.
+  const attachDisplayTransform = (target: EventTarget, replace: (content: string) => string) => {
+    const seen: { name?: string; type?: string }[] = [];
+    const listener = vi.fn((event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      seen.push({ name: detail.name, type: detail.type });
+      detail.data = Promise.resolve(detail.data).then((data: string) => replace(data));
+    });
+    target.addEventListener('data', listener);
+    return { seen, listener };
+  };
+
+  it('exposes a transformTarget on the book', async () => {
+    const book = await make('# A\n\nteh text\n');
+    expect(book.transformTarget).toBeInstanceOf(EventTarget);
+  });
+
+  it('routes section loadContent through data listeners with the section index as name', async () => {
+    const book = await make('# A\n\nteh text\n\n# B\n\nteh other\n');
+    const { seen } = attachDisplayTransform(book.transformTarget!, (content) =>
+      content.replace(/teh/g, 'the'),
+    );
+    const content = await book.sections[1]!.loadContent!();
+    expect(content).toContain('the other');
+    expect(content).not.toContain('teh');
+    // Selection-scoped proofread rules compare rule.sectionHref (a TOC href
+    // like "1#b") against detail.name via split('#')[0], so the name must be
+    // the bare section index.
+    expect(seen[0]?.name).toBe('1');
+    expect(seen[0]?.type).toBe('application/xhtml+xml');
+  });
+
+  it('caches the transformed content until unload invalidates it', async () => {
+    const book = await make('# A\n\nteh text\n');
+    const { listener } = attachDisplayTransform(book.transformTarget!, (content) =>
+      content.replace(/teh/g, 'the'),
+    );
+    await book.sections[0]!.loadContent!();
+    await book.sections[0]!.loadContent!();
+    expect(listener).toHaveBeenCalledTimes(1);
+    // Viewer recreation (e.g. after a proofread rule change) destroys the
+    // views, which unloads the sections; the next load must re-transform.
+    book.sections[0]!.unload!();
+    await book.sections[0]!.loadContent!();
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps createDocument raw so the TTS transform path does not double-apply', async () => {
+    const book = await make('# A\n\nteh text\n');
+    attachDisplayTransform(book.transformTarget!, (content) => content.replace(/teh/g, 'the'));
+    const doc = await book.sections[0]!.createDocument();
+    expect(doc.documentElement.textContent).toContain('teh text');
+  });
+
+  it('falls back to the raw content when the transform yields nothing', async () => {
+    const book = await make('# A\n\nteh text\n');
+    attachDisplayTransform(book.transformTarget!, () => '');
+    const content = await book.sections[0]!.loadContent!();
+    expect(content).toContain('teh text');
   });
 });
 

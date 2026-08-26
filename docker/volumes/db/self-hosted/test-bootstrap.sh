@@ -40,7 +40,7 @@ assert_contains 'COMMIT;'
 assert_contains 'CREATE TABLE public.books'
 assert_contains "\\echo 'Applying 002_add_book_shares.sql...'"
 assert_contains "\\echo 'Applying 014_add_reading_stats.sql...'"
-assert_contains '20260727_self_hosted_baseline_018'
+assert_contains '20260813_self_hosted_baseline_019'
 assert_contains 'CREATE SCHEMA IF NOT EXISTS readest_internal'
 assert_contains 'GRANT SELECT ON TABLE public.send_inbox TO authenticated'
 assert_contains 'CREATE OR REPLACE FUNCTION public.get_storage_by_book_hash(p_user_id uuid)'
@@ -51,6 +51,7 @@ assert_contains 'REVOKE ALL ON FUNCTION public.get_storage_by_book_hash(uuid) FR
 assert_contains 'GRANT SELECT ON public.files TO service_role'
 assert_contains 'GRANT EXECUTE ON FUNCTION public.get_storage_by_book_hash(uuid) TO service_role'
 assert_contains '018_add_storage_stats_rpc'
+assert_contains '019_add_metadata_updated_at'
 assert_contains "NOTIFY pgrst, 'reload schema'"
 assert_contains 'Readest self-hosted baseline is already applied; no changes made.'
 assert_contains 'run self-hosted/upgrade.sh before retrying the baseline.'
@@ -62,6 +63,7 @@ assert_not_contains 'Migration 015:'
 assert_not_contains 'Migration 016:'
 assert_not_contains 'Migration 017:'
 assert_not_contains "\\echo 'Applying 018_add_storage_stats_rpc.sql...'"
+assert_not_contains "\\echo 'Applying 019_add_metadata_updated_at.sql...'"
 assert_not_contains 'CREATE INDEX CONCURRENTLY'
 assert_not_contains 'CALL public.backfill_books_synced_at'
 assert_not_contains '\quit 0'

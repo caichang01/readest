@@ -18,7 +18,8 @@ export type CloudSyncProviderKind = 'readest' | FileSyncBackendKind;
 /** Settings slice key for a third-party backend kind. */
 export const settingsKeyForBackend = (
   kind: FileSyncBackendKind,
-): 'webdav' | 'googleDrive' | 's3' | 'onedrive' => (kind === 'gdrive' ? 'googleDrive' : kind);
+): 'webdav' | 'googleDrive' | 's3' | 'onedrive' | 'icloud' =>
+  kind === 'gdrive' ? 'googleDrive' : kind;
 
 /** Human-readable provider name (product names — deliberately untranslated). */
 export const cloudProviderDisplayName = (kind: CloudSyncProviderKind): string =>
@@ -30,7 +31,9 @@ export const cloudProviderDisplayName = (kind: CloudSyncProviderKind): string =>
         ? 'S3'
         : kind === 'onedrive'
           ? 'OneDrive'
-          : 'Readest Cloud';
+          : kind === 'icloud'
+            ? 'iCloud'
+            : 'Readest Cloud';
 
 /**
  * The third-party backends the user has switched on, in a STABLE order that
@@ -44,6 +47,7 @@ export const getEnabledFileSyncBackends = (
   if (settings?.googleDrive?.enabled) enabled.push('gdrive');
   if (settings?.s3?.enabled) enabled.push('s3');
   if (settings?.onedrive?.enabled) enabled.push('onedrive');
+  if (settings?.icloud?.enabled) enabled.push('icloud');
   return enabled;
 };
 
@@ -79,7 +83,7 @@ export const cloudProvidersDisplayName = (kinds: CloudSyncProviderKind[]): strin
 export interface CloudSyncGate {
   /** Readest Cloud syncs the library channels (rows, progress, notes, files). */
   readest: boolean;
-  /** Third-party backends the user switched on, in the fixed webdav/gdrive/s3/onedrive order. */
+  /** Third-party backends the user switched on, in the fixed webdav/gdrive/s3/onedrive/icloud order. */
   backends: FileSyncBackendKind[];
   /** Kept for status-model compatibility; the fork never pauses sync by plan. */
   paused: boolean;
@@ -138,6 +142,12 @@ export const applySyncBooksAutoEnable = (settings: SystemSettings): boolean => {
       case 'onedrive':
         if (settings.onedrive && !settings.onedrive.syncBooks) {
           settings.onedrive = { ...settings.onedrive, syncBooks: true };
+          changed = true;
+        }
+        break;
+      case 'icloud':
+        if (settings.icloud && !settings.icloud.syncBooks) {
+          settings.icloud = { ...settings.icloud, syncBooks: true };
           changed = true;
         }
         break;
