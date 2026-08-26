@@ -17,6 +17,13 @@ set -euo pipefail
 printf 'ssh' >>"$COMMAND_LOG"
 printf ' <%s>' "$@" >>"$COMMAND_LOG"
 printf '\n' >>"$COMMAND_LOG"
+last_argument=''
+for argument in "$@"; do
+  last_argument="$argument"
+done
+if [[ "$last_argument" == 'printf "%s" "$HOME"' ]]; then
+  printf '/home/tester'
+fi
 SH
 
 cat >"$BIN_DIR/scp" <<'SH'
@@ -73,5 +80,16 @@ assert_log_contains './self-hosted/upgrade.sh sudo -iu postgres psql -d postgres
 assert_log_contains "sudo -iu postgres psql -d postgres -X -v ON_ERROR_STOP=1 < self-hosted/verify.sql"
 assert_log_not_contains 'bootstrap.sh'
 assert_log_not_contains 'pig pb backup'
+
+: >"$LOG_FILE"
+PATH="$BIN_DIR:$PATH" COMMAND_LOG="$LOG_FILE" \
+  "$DEPLOY_SCRIPT" \
+  --host tester@db.example.test \
+  --backup-completed >/dev/null
+
+assert_log_contains 'ssh <tester@db.example.test> <printf "%s" "$HOME">'
+assert_log_contains '<tester@db.example.test:/home/tester/readest-db-019-'
+assert_log_not_contains '<-p>'
+assert_log_not_contains '<-P>'
 
 echo 'remote self-hosted upgrade deployment test passed'

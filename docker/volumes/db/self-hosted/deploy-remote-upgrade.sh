@@ -95,15 +95,24 @@ for required_file in "${required_files[@]}"; do
   [[ -f "$required_file" ]] || die "required file is missing: $required_file"
 done
 
-ssh_options=()
-scp_options=()
-if [[ -n "$PORT" ]]; then
-  ssh_options=(-p "$PORT")
-  scp_options=(-P "$PORT")
-fi
+run_ssh() {
+  if [[ -n "$PORT" ]]; then
+    command ssh -p "$PORT" "$@"
+  else
+    command ssh "$@"
+  fi
+}
+
+run_scp() {
+  if [[ -n "$PORT" ]]; then
+    command scp -P "$PORT" "$@"
+  else
+    command scp "$@"
+  fi
+}
 
 if [[ -z "$REMOTE_DIR" ]]; then
-  remote_home="$(ssh "${ssh_options[@]}" "$HOST" 'printf "%s" "$HOME"')"
+  remote_home="$(run_ssh "$HOST" 'printf "%s" "$HOME"')"
   [[ "$remote_home" =~ ^/[A-Za-z0-9._/-]+$ ]] || die \
     'remote home directory contains unsupported characters; pass a safe absolute path with --remote-dir'
   REMOTE_DIR="${remote_home%/}/readest-db-019-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -114,21 +123,21 @@ if [[ ! "$REMOTE_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
 fi
 
 echo "Preparing remote staging directory: $HOST:$REMOTE_DIR"
-ssh "${ssh_options[@]}" "$HOST" \
+run_ssh "$HOST" \
   "mkdir -p -- '$REMOTE_DIR/migrations' '$REMOTE_DIR/self-hosted'"
 
 echo 'Uploading Readest migrations and verification files...'
-scp "${scp_options[@]}" \
+run_scp \
   "$MIGRATIONS_DIR/018_add_storage_stats_rpc.sql" \
   "$MIGRATIONS_DIR/019_add_metadata_updated_at.sql" \
   "$HOST:$REMOTE_DIR/migrations/"
-scp "${scp_options[@]}" \
+run_scp \
   "$SCRIPT_DIR/upgrade.sh" \
   "$SCRIPT_DIR/verify.sql" \
   "$HOST:$REMOTE_DIR/self-hosted/"
 
 echo 'Applying forward migrations and running independent verification...'
-ssh "${ssh_options[@]}" -tt "$HOST" \
+run_ssh -tt "$HOST" \
   "set -e; cd '$REMOTE_DIR'; chmod +x self-hosted/upgrade.sh; ./self-hosted/upgrade.sh sudo -iu postgres psql -d postgres -X; sudo -iu postgres psql -d postgres -X -v ON_ERROR_STOP=1 < self-hosted/verify.sql"
 
 echo

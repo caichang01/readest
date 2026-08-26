@@ -861,6 +861,11 @@ macOS 和 Web 修复。这些能力仍需通过候选安装包验证，不能仅
 依次运行 `upgrade.sh` 和 `verify.sql`；它不会执行备份或 `bootstrap.sh`。模拟远端命令的
 回归测试已加入 `pnpm test:self-hosted-db`。
 
+2026-08-26 首次真实执行发现 macOS Bash 3.2 在 `set -u` 下展开空 SSH 选项数组会报
+`ssh_options[@]: unbound variable`，因此默认 22 端口路径在建立连接前退出。脚本改为不依赖
+空数组的 `run_ssh`/`run_scp` 包装函数；回归测试同时覆盖默认端口与自动远端目录，以及
+自定义端口与显式远端目录，两种路径均在 Bash 3.2 下通过。
+
 2026-08-13 候选流水线结果：
 
 - 最终候选提交为 `20ca889ca42e46aa3d47542981671cded4e27752`，已推送至
