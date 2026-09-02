@@ -86,13 +86,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Missing file info' });
     }
 
-    const { usage, limit } = getStoragePolicyData(token);
+    const { usage: claimUsage, limit } = getStoragePolicyData(token);
+    const supabase = createSupabaseAdminClient();
+    let usage = claimUsage;
+    // A configured deployment ceiling must use current file records, not a
+    // possibly stale JWT or the upstream membership table. Unlimited remains
+    // the default and does not need this query.
+    if (limit !== null) {
+      usage = 0;
+      const pageSize = 1000;
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error } = await supabase
+          .from('files')
+          .select('file_size')
+          .eq('user_id', user.id)
+          .is('deleted_at', null)
+          .order('file_key')
+          .range(offset, offset + pageSize - 1);
+        if (error || !data) {
+          return res.status(503).json({ error: 'Could not determine current storage usage' });
+        }
+        usage += data.reduce((total, file) => total + Number(file.file_size || 0), 0);
+        if (data.length < pageSize) break;
+      }
+    }
     if (isStorageLimitExceeded(usage, fileSize, limit)) {
       return res.status(403).json({ error: 'Storage limit exceeded', usage, limit });
     }
 
     const fileKey = `${user.id}/${fileName}`;
-    const supabase = createSupabaseAdminClient();
     const { data: existingRecord, error: fetchError } = await supabase
       .from('files')
       .select('*')

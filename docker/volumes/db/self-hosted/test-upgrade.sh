@@ -48,6 +48,17 @@ assert_contains 'GRANT EXECUTE ON FUNCTION public.get_storage_by_book_hash(uuid)
 assert_contains '019_add_metadata_updated_at'
 assert_contains "\\echo 'Applying 019_add_metadata_updated_at.sql...'"
 assert_contains 'ADD COLUMN IF NOT EXISTS metadata_updated_at timestamp with time zone NULL'
+assert_contains '20260902_self_hosted_baseline_024'
+for migration in 020_stat_pages_upsert_rpc 021_stat_archives 022_stat_archive_row_cap 023_add_group_updated_at; do
+  assert_contains "$migration"
+  assert_contains "\\echo 'Applying $migration.sql...'"
+done
+assert_contains 'CREATE OR REPLACE FUNCTION public.upsert_stat_pages(p_rows jsonb)'
+assert_contains 'ADD COLUMN IF NOT EXISTS group_updated_at timestamp with time zone NULL'
+assert_contains 'GRANT SELECT ON public.stat_archives TO authenticated'
+assert_contains 'pg_advisory_xact_lock'
+assert_contains '024_replica_abs_server'
+assert_contains "'abs_server'"
 assert_contains "NOTIFY pgrst, 'reload schema'"
 assert_contains 'Readest self-hosted migrations are already current; no changes made.'
 assert_contains "RAISE EXCEPTION 'Readest migration ledger is missing"
@@ -68,6 +79,12 @@ assert_verify_contains "to_regprocedure('public.get_storage_by_book_hash(uuid)')
 assert_verify_contains "'018_add_storage_stats_rpc'"
 assert_verify_contains "'019_add_metadata_updated_at'"
 assert_verify_contains "column_name = 'metadata_updated_at'"
+assert_verify_contains "column_name = 'group_updated_at'"
+assert_verify_contains "'023_add_group_updated_at'"
+assert_verify_contains "to_regprocedure('public.upsert_stat_pages(jsonb)')"
+assert_verify_contains "'stat_archive_state'"
+assert_verify_contains "'024_replica_abs_server'"
+assert_verify_contains "'%abs_server%'"
 assert_verify_contains "'service_role'"
 assert_verify_contains "acl.privilege_type = 'EXECUTE'"
 assert_verify_contains "has_table_privilege('service_role', 'public.files', 'SELECT')"

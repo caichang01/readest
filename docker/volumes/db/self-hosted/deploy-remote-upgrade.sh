@@ -27,7 +27,7 @@ Options:
   --remote-dir PATH      Absolute staging directory on the remote host
   -h, --help             Show this help
 
-The script uploads only migrations 018/019 plus upgrade.sh and verify.sql. It
+The script uploads only migrations 018–024 plus upgrade.sh and verify.sql. It
 does not run the backup command and never runs bootstrap.sh.
 EOF
 }
@@ -87,6 +87,11 @@ done
 required_files=(
   "$MIGRATIONS_DIR/018_add_storage_stats_rpc.sql"
   "$MIGRATIONS_DIR/019_add_metadata_updated_at.sql"
+  "$MIGRATIONS_DIR/020_stat_pages_upsert_rpc.sql"
+  "$MIGRATIONS_DIR/021_stat_archives.sql"
+  "$MIGRATIONS_DIR/022_stat_archive_row_cap.sql"
+  "$MIGRATIONS_DIR/023_add_group_updated_at.sql"
+  "$MIGRATIONS_DIR/024_replica_abs_server.sql"
   "$SCRIPT_DIR/upgrade.sh"
   "$SCRIPT_DIR/verify.sql"
 )
@@ -115,7 +120,7 @@ if [[ -z "$REMOTE_DIR" ]]; then
   remote_home="$(run_ssh "$HOST" 'printf "%s" "$HOME"')"
   [[ "$remote_home" =~ ^/[A-Za-z0-9._/-]+$ ]] || die \
     'remote home directory contains unsupported characters; pass a safe absolute path with --remote-dir'
-  REMOTE_DIR="${remote_home%/}/readest-db-019-$(date -u +%Y%m%dT%H%M%SZ)"
+  REMOTE_DIR="${remote_home%/}/readest-db-024-$(date -u +%Y%m%dT%H%M%SZ)"
 fi
 
 if [[ ! "$REMOTE_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
@@ -130,6 +135,11 @@ echo 'Uploading Readest migrations and verification files...'
 run_scp \
   "$MIGRATIONS_DIR/018_add_storage_stats_rpc.sql" \
   "$MIGRATIONS_DIR/019_add_metadata_updated_at.sql" \
+  "$MIGRATIONS_DIR/020_stat_pages_upsert_rpc.sql" \
+  "$MIGRATIONS_DIR/021_stat_archives.sql" \
+  "$MIGRATIONS_DIR/022_stat_archive_row_cap.sql" \
+  "$MIGRATIONS_DIR/023_add_group_updated_at.sql" \
+  "$MIGRATIONS_DIR/024_replica_abs_server.sql" \
   "$HOST:$REMOTE_DIR/migrations/"
 run_scp \
   "$SCRIPT_DIR/upgrade.sh" \

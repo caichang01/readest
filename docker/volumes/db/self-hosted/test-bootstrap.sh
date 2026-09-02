@@ -40,7 +40,14 @@ assert_contains 'COMMIT;'
 assert_contains 'CREATE TABLE public.books'
 assert_contains "\\echo 'Applying 002_add_book_shares.sql...'"
 assert_contains "\\echo 'Applying 014_add_reading_stats.sql...'"
-assert_contains '20260813_self_hosted_baseline_019'
+assert_contains '20260902_self_hosted_baseline_024'
+assert_contains '024_replica_abs_server'
+assert_contains "'abs_server'"
+assert_contains 'CREATE OR REPLACE FUNCTION public.upsert_stat_pages(p_rows jsonb)'
+assert_contains 'CREATE TABLE IF NOT EXISTS public.stat_archives'
+assert_contains 'CREATE TABLE IF NOT EXISTS public.stat_archive_state'
+assert_contains 'CREATE TABLE IF NOT EXISTS public.stat_archive_orphans'
+assert_contains '023_add_group_updated_at'
 assert_contains 'CREATE SCHEMA IF NOT EXISTS readest_internal'
 assert_contains 'GRANT SELECT ON TABLE public.send_inbox TO authenticated'
 assert_contains 'CREATE OR REPLACE FUNCTION public.get_storage_by_book_hash(p_user_id uuid)'

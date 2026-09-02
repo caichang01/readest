@@ -16,6 +16,8 @@
 [submodule "apps/readest-app/.claude/skills/gstack"]
 	path = apps/readest-app/.claude/skills/gstack
 	url = https://github.com/garrytan/gstack.git
+	# Optional agent tooling is not a runtime/build dependency.
+	update = none
 [submodule "packages/qcms"]
 	path = packages/qcms
 	url = https://github.com/mozilla/pdf.js.qcms.git
