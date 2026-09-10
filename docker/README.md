@@ -60,6 +60,9 @@ container env, so custom self-hosted values work with pulled images.
 storage and translation limits are deployment-wide operational safeguards, not membership entitlements;
 both default to `0` (unlimited).
 
+This fork has no membership gates, regardless of deployment mode. No
+`SELF_HOSTED` switch or paid plan is required to unlock third-party sync.
+
 if you prefer Docker Hub, set `READEST_IMAGE` in `docker/.env`, for example:
 
 ```env

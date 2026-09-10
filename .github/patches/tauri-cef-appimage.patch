@@ -1,0 +1,29 @@
+diff --git a/crates/tauri-bundler/src/bundle/linux/appimage/sharun_cef.rs b/crates/tauri-bundler/src/bundle/linux/appimage/sharun_cef.rs
+--- a/crates/tauri-bundler/src/bundle/linux/appimage/sharun_cef.rs
++++ b/crates/tauri-bundler/src/bundle/linux/appimage/sharun_cef.rs
+@@ -18,6 +18,6 @@
+   utils::{
+     fs_utils,
+-    http_utils::{download_and_verify, verify_file_hash, HashAlgorithm},
++    http_utils::{verify_file_hash, HashAlgorithm},
+     CommandExt,
+   },
+ };
+@@ -25,3 +25,1 @@
+-use super::write_and_make_executable;
+-
+ /// Pinned revision of the Anylinux-AppImages tooling.
+@@ -59,9 +57,5 @@
+-  let data = download_and_verify(
+-    &anylinux_raw_url("quick-sharun.sh"),
+-    QUICK_SHARUN_SHA256,
+-    HashAlgorithm::Sha256,
+-  )?;
+-  write_and_make_executable(&script, data)?;
+-
+-  Ok(script)
++  Err(crate::Error::GenericError(format!(
++    "quick-sharun.sh was not preloaded with the expected checksum at {}",
++    script.display()
++  )))
+ }
