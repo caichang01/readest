@@ -199,7 +199,7 @@ const S3Form: React.FC = () => {
               'h-10 rounded-lg px-4 text-sm font-medium',
               'text-error hover:bg-error/10',
               'transition-colors duration-150',
-              'focus-visible:ring-error/40 focus-visible:outline-none focus-visible:ring-2',
+              'focus-visible:ring-error/40 focus-visible:outline-hidden focus-visible:ring-2',
             )}
           >
             {_('Disconnect')}
@@ -227,7 +227,7 @@ const S3Form: React.FC = () => {
             id='s3-endpoint'
             type='text'
             placeholder='https://<account-id>.r2.cloudflarestorage.com'
-            className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+            className='input eink-bordered h-11 w-full text-sm focus:outline-hidden'
             spellCheck='false'
             value={endpoint}
             onChange={(e) => {
@@ -245,7 +245,7 @@ const S3Form: React.FC = () => {
             id='s3-bucket'
             type='text'
             placeholder='readest'
-            className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+            className='input eink-bordered h-11 w-full text-sm focus:outline-hidden'
             spellCheck='false'
             value={bucket}
             onChange={(e) => {
@@ -263,7 +263,7 @@ const S3Form: React.FC = () => {
             id='s3-region'
             type='text'
             placeholder='auto'
-            className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+            className='input eink-bordered h-11 w-full text-sm focus:outline-hidden'
             spellCheck='false'
             value={region}
             onChange={(e) => {
@@ -281,7 +281,7 @@ const S3Form: React.FC = () => {
             id='s3-access-key-id'
             type='text'
             placeholder={_('Your Access Key ID')}
-            className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+            className='input eink-bordered h-11 w-full text-sm focus:outline-hidden'
             spellCheck='false'
             value={accessKeyId}
             onChange={(e) => {
@@ -301,7 +301,7 @@ const S3Form: React.FC = () => {
               id='s3-secret-access-key'
               type={showSecret ? 'text' : 'password'}
               placeholder={_('Your Secret Access Key')}
-              className='input input-bordered eink-bordered h-11 w-full pe-11 text-sm focus:outline-none'
+              className='input eink-bordered h-11 w-full pe-11 text-sm focus:outline-hidden'
               value={secretAccessKey}
               onChange={(e) => {
                 isDraftDirty.current = true;
@@ -317,7 +317,7 @@ const S3Form: React.FC = () => {
                 'flex h-8 w-8 items-center justify-center rounded',
                 'text-base-content/60 hover:text-base-content',
                 'hover:bg-base-200/60 transition-colors duration-150',
-                'focus-visible:ring-base-content/15 focus-visible:outline-none focus-visible:ring-2',
+                'focus-visible:ring-base-content/15 focus-visible:outline-hidden focus-visible:ring-2',
               )}
               aria-label={showSecret ? _('Hide password') : _('Show password')}
               title={showSecret ? _('Hide password') : _('Show password')}
@@ -339,7 +339,7 @@ const S3Form: React.FC = () => {
             className={clsx(
               'btn btn-contrast',
               'h-10 min-h-10 rounded-lg border-0 px-5 text-sm font-medium',
-              'focus-visible:ring-base-content/40 focus-visible:outline-none focus-visible:ring-2',
+              'focus-visible:ring-base-content/40 focus-visible:outline-hidden focus-visible:ring-2',
               isConnecting && 'opacity-60',
             )}
           >

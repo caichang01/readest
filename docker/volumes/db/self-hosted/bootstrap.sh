@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DB_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 INIT_SCHEMA="$DB_DIR/init/schema.sql"
 MIGRATIONS_DIR="$DB_DIR/migrations"
-BASELINE_VERSION="20260813_self_hosted_baseline_019"
+BASELINE_VERSION="20260902_self_hosted_baseline_024"
 PREVIOUS_BASELINE_VERSION="20260727_self_hosted_baseline_017"
 STORAGE_STATS_MIGRATION_VERSION="018_add_storage_stats_rpc"
 METADATA_MIGRATION_VERSION="019_add_metadata_updated_at"
@@ -29,6 +29,11 @@ MIGRATIONS=(
   "011_replica_settings.sql"
   "012_send_to_readest.sql"
   "014_add_reading_stats.sql"
+  "020_stat_pages_upsert_rpc.sql"
+  "021_stat_archives.sql"
+  "022_stat_archive_row_cap.sql"
+  "023_add_group_updated_at.sql"
+  "024_replica_abs_server.sql"
 )
 
 for migration in "${MIGRATIONS[@]}"; do
@@ -75,7 +80,11 @@ SELECT EXISTS (
 SELECT EXISTS (
   SELECT 1
   FROM readest_internal.schema_migrations
-  WHERE version = '$PREVIOUS_BASELINE_VERSION'
+  WHERE version IN (
+    '$PREVIOUS_BASELINE_VERSION',
+    '20260727_self_hosted_baseline_018',
+    '20260813_self_hosted_baseline_019'
+  )
 ) AS previous_baseline_applied
 \gset
 \else
@@ -124,7 +133,10 @@ SELECT NOT EXISTS (
       'send_allowed_senders',
       'send_inbox',
       'stat_books',
-      'stat_pages'
+      'stat_pages',
+      'stat_archives',
+      'stat_archive_state',
+      'stat_archive_orphans'
     )
 ) AS target_is_clean
 \gset
@@ -228,7 +240,10 @@ BEGIN
       ('send_allowed_senders'),
       ('send_inbox'),
       ('stat_books'),
-      ('stat_pages')
+      ('stat_pages'),
+      ('stat_archives'),
+      ('stat_archive_state'),
+      ('stat_archive_orphans')
   ) AS expected(name)
   WHERE to_regclass(format('public.%I', expected.name)) IS NULL;
 
@@ -253,7 +268,10 @@ BEGIN
       'send_allowed_senders',
       'send_inbox',
       'stat_books',
-      'stat_pages'
+      'stat_pages',
+      'stat_archives',
+      'stat_archive_state',
+      'stat_archive_orphans'
     )
     AND NOT c.relrowsecurity;
 
@@ -329,7 +347,7 @@ CREATE TABLE IF NOT EXISTS readest_internal.schema_migrations (
 INSERT INTO readest_internal.schema_migrations (version, description)
 VALUES (
   :'baseline_version',
-  'Readest self-hosted Supabase baseline through migration 019'
+  'Readest self-hosted Supabase baseline through migration 024'
 );
 
 INSERT INTO readest_internal.schema_migrations (version, description)
@@ -343,6 +361,13 @@ VALUES (
   :'metadata_migration_version',
   'Add metadata conflict-resolution timestamp to books'
 );
+
+INSERT INTO readest_internal.schema_migrations (version, description) VALUES
+  ('020_stat_pages_upsert_rpc', 'Add row-scoped reading statistics upsert'),
+  ('021_stat_archives', 'Add optional reading statistics archive infrastructure'),
+  ('022_stat_archive_row_cap', 'Bound reading statistics archive batches'),
+  ('023_add_group_updated_at', 'Add independent group conflict-resolution timestamp'),
+  ('024_replica_abs_server', 'Allow encrypted Audiobookshelf server replicas');
 
 NOTIFY pgrst, 'reload schema';
 

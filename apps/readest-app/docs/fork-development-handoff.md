@@ -1,6 +1,6 @@
 # Readest fork 二次开发交接记录
 
-最后更新：2026-08-26
+最后更新：2026-09-10
 
 这份文档记录本 fork 相对上游 Readest 的产品目标、已经完成的改造、验证结果、已知问题和后续计划。开始新的 fork 专属开发前，应先阅读本文；完成一个阶段后，应同步更新日期、提交、测试结果和未完成事项。
 
@@ -16,9 +16,10 @@
   `62f9f3d1 merge: sync upstream 0.11.20 with fork compatibility` 合并到 `master`；随后
   `7c29645f merge: stabilize Linux AppImage release builds` 完成 AppImage 确定性修复并发布
   `v0.11.20`。
-- 2026-08-13 已从该已发布基线创建 `codex/upstream-sync-20260813`，同步上游 `0.12.1`
-  的 147 个新提交。冲突兼容、本地静态检查、Rust/数据库/重点前端测试已经完成；在非发布
-  跨平台候选流水线和用户验收完成前，本分支不得合并到 `master`。
+- 第二轮 `0.12.1` 同步已完成用户验收，2026-08-26 经 `3b0eebb6` 合并至 master，
+  两条 fork Actions 和 `v0.12.1` Release 均已成功。
+- 第三轮分支 `codex/upstream-sync-20260902`（上游 `0.12.6`）已完成候选构建，
+  2026-09-10 用户授权合并 master；本次合并包含部署教程，生产升级仍由用户执行，详见 3.7.2。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -893,6 +894,86 @@ macOS 和 Web 修复。这些能力仍需通过候选安装包验证，不能仅
   基本功能均由用户确认通过；六平台构建矩阵和补齐后的 Lua 验证也已通过。
 - 用户明确授权将 `codex/upstream-sync-20260813` 以普通 merge commit 合并到 `master`。
   应用版本为 `0.12.1`；推送 `master` 后由 fork 流水线按版本变化规则创建正式 Release。
+
+### 3.7.2 2026-09-02 第三轮受控同步上游
+
+开发分支：`codex/upstream-sync-20260902`。
+
+- fork 起点：`3b0eebb671dbe5bcec737f462422a8950b5baca8`，已发布并验收 `v0.12.1`。
+- 共同祖先：`42c7a2cb0f46dc5b624918ba7dc000ca70f89e2e`。
+- 官方目标：`6df90139dc7b72246572ab33b12d485b281ca6e6`，上游 `0.12.6`；新增 161 个提交。
+- 已将该精确目标纯快进镜像到 `origin/upstream`。
+- 采用普通三方 merge，初始 46 个冲突路径逐项处理，未重写已发布历史。
+
+主要变化与兼容决定：
+
+1. 保留无会员、无套餐和默认无配额；清理上游重新引入的 Full Customization 付费解锁、
+   订阅/IAP/Stripe 界面、路由及专属测试。TTS 离线、所有第三方同步继续免费开放。
+2. 接入 Notebook、Notion、Audiobookshelf、Nearby BookDrop、快捷键、阅读器修复和
+   Tailwind 4/DaisyUI 5/TypeScript 7 升级。自建 Supabase 和 fork updater 信任配置不变。
+3. **用户于本轮明确选择按需下载**：同步先建立书架、封面、进度和笔记，正文在打开或显式
+   下载时获取。“仅从设备移除”不再被普通同步立即下载回来；完整同步也沿用上游的书架/
+   元数据重新校验语义，不表示批量下载全部正文。此前普通同步自动下载的契约已被此决定替代。
+4. 保留打开缺失/损坏书籍的一次自动恢复、流式下载后的本地文件大小校验、S3 脱敏日志和
+   设置草稿保护。吸收上游 S3 SigV4 编码修复、下载进度回调及元数据/分组独立冲突时钟。
+5. 可选部署级存储上限以当前 files 记录分页统计，不查询 plans 表、不信任过期 JWT 用量；
+   未配置上限时不新增统计查询。该上限不是会员配额，也不保证并发上传下的严格原子预留。
+6. 新增 Nix 工作流全部放入禁用目录；活动流水线仍只有 fork-release 和 fork-web-image。
+7. 已部署的 018/019 编号保持不变。上游 019–022 依次映射为 fork 020–023；新增 024
+   补齐上游 Audiobookshelf 的 abs_server 副本类型。升级脚本加事务级互斥锁，并显式赋予
+   Pigsty 所需权限，保持 RLS 和服务端归档表的最小权限。
+8. 阅读统计归档仅安装数据库基础结构；没有 STATS_ARCHIVE_R2/压缩任务配置时不会运行
+   自动归档或删除热统计数据。自建 Node Web/API 仍走未启用归档的路径。
+9. 上游最低 Android WebView 从 92 提升为 111，自动升级建议仍为 121；旧设备需验证
+   WebView 更新能力。iOS 最低版本提升为 16.4，但本 fork 仍不构建或发布 iOS/iPadOS 包。
+10. 可选 gstack 智能体工具不参与应用编译，但递归子模块下载在本机出现 HTTP/2 断流。
+    `.gitmodules` 将它标为 `update = none`，防止无关工具下载阻断安装包/镜像构建；应用
+    代码子模块仍正常初始化。需要该开发工具时可显式单独 checkout，不删除其来源指针。
+
+数据库迁移映射：
+
+| fork 编号 | 内容 | 来源 |
+| --- | --- | --- |
+| 020 | 阅读统计批量 upsert RPC | 上游 019 |
+| 021 | 可选统计归档表/RPC，补齐显式权限 | 上游 020 |
+| 022 | 限制归档批次行数 | 上游 021 |
+| 023 | books.group_updated_at | 上游 022 |
+| 024 | replicas 允许 abs_server | fork 自建兼容补充 |
+
+验证进展：
+
+- 文件同步目标回归：225/225 通过，包含按需发现、不立即恢复已移除副本、显式下载完整性检查。
+- DeepL 语言码回归：70/70 通过；修复的只是新增测试对旧会员接口的 mock，未撤回上游语言码修复。
+- fork GitHub 脚本/不变量：25 项，新增可选工具不阻塞构建的契约；类型检查、Biome lint/格式及数据库生成/SSH-SCP 模拟测试通过。
+- Lua 语法和 347 项测试通过。
+- Readest Rust fmt/clippy 通过，129 项单元测试通过；上游依赖仍有非阻断 warning。
+- LocalSend 辅助程序 fmt/clippy、24 项单测与 2 项真实进程协议测试通过。
+- Chromium 浏览器回归：51 个文件通过，414 项通过、1 项按预期跳过。
+- 第一轮全量 Vitest：862 个文件通过、1 文件失败、1 文件跳过；10468 通过、5 失败、10 跳过。
+  5 个失败均为上述 DeepL 测试 mock，已修复。最终按需下载版本全量复跑：863 个文件通过、
+  1 个文件跳过；10473 项通过、10 项按预期跳过、0 失败。
+- Turbopack 首次构建被本机端口沙箱权限阻断；相同缓存的重跑继续复现。保留缓存备份、
+  移开失败缓存并在批准的扩展执行环境下重跑后通过。Turbopack 和 Webpack 两种生产
+  构建均通过、生成 34 个静态页面；未修改 CI 构建方式。
+- 本机没有 PostgreSQL 服务/psql，数据库测试目前仅为 SQL 生成和模拟远端流程，不等同真实 PG 执行。
+
+2026-09-10 主线推进记录：候选提交 `aedd25944a71579b4f8f8bc8794fdfefb3cf4dd7`
+的 [安装包 Actions](https://github.com/caichang01/readest/actions/runs/33600048063)
+与 [Web/API Actions](https://github.com/caichang01/readest/actions/runs/33599990334)
+均成功。安装包覆盖 Android、Windows x64/ARM64、Linux x64/ARM64、macOS Universal；
+候选运行未发布 Release。用户已授权合并 master，主线推送后由流水线构建并按版本发布。
+生产数据库迁移和镜像部署尚未代用户执行，操作见
+[QNAP 与 Pigsty 升级教程](../../../docker/UPGRADE_0.12.6_QNAP_PIGSTY.md)。
+
+部署验收要求：数据库主机执行
+`sudo -iu postgres pig pb backup` 成功后，从本候选分支运行现有
+`docker/volumes/db/self-hosted/deploy-remote-upgrade.sh --host USER@HOST --backup-completed`，
+应用 020–024 并执行 verify.sql；部署新的候选 Web/API 镜像。预期 Readest 表数为 15，
+原有用户/书籍/副本数据不得重建。真机验证登录、S3 凭据同步、按需下载、离线重开、进度/
+笔记/设置、仅设备移除再打开、分组/元数据跨设备修改和 fork 更新检查。
+
+每周任务说明已写入 [upstream-sync-runbook.md](upstream-sync-runbook.md)。本会话定时任务
+接口不可用，**尚未创建或启用定时任务**；不得据此宣称每周自动执行已经运行。
 
 ## 4. S3 跨设备“无法打开书籍”调查
 

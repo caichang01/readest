@@ -75,6 +75,93 @@ test.describe('Annotation', () => {
     await expect(reader.popupTool('Highlight')).toBeVisible();
   });
 
+  // The instant dictionary is the other side of the #5213 boundary: the word was
+  // tapped to be looked up, not selected, so the lookup owns the gesture end to
+  // end — nothing is left to highlight or copy afterwards.
+  test('the instant dictionary drops the selection and dismisses clean (#5585)', async ({
+    openBook,
+  }) => {
+    const reader = await openBook();
+
+    await reader.setQuickAction('Dictionary');
+    await reader.selectWord();
+
+    await expect(reader.dictionaryPopup).toBeVisible();
+    await expect(reader.annotationPopup).toBeHidden();
+    // iOS paints its native selection handles and blue highlight above web
+    // content, i.e. on top of the popup, so the lookup deselects as it opens.
+    expect(await reader.selectedSectionText()).toBe('');
+
+    await reader.page.keyboard.press('Escape');
+
+    await expect(reader.dictionaryPopup).toBeHidden();
+    // No live selection left, so the dismiss has no toolbar to return to.
+    await expect(reader.annotationPopup).toBeHidden();
+  });
+
+  // Tapping a highlight (or holding one out with Instant Highlight) opens its
+  // range editor: app-drawn handles in a fixed overlay painted after the lookup
+  // popups, so they floated on top of the dictionary (#5815). A lookup hides
+  // them; they come back only with the toolbar.
+  // #5815 unmounts the handles for the lookup popups, but the reason they were
+  // ever on top is that both layers were z-50 in one stacking context, so the
+  // tie broke on DOM order and the range editors are rendered last. Any surface
+  // that forgets to join that gate — the note editor did — gets handles drawn
+  // over it. Pin the layer order itself, read off the live DOM.
+  test('draws the range-edit handles below the popup layer', async ({ openBook }) => {
+    const reader = await openBook();
+
+    await reader.selectText();
+    await reader.highlightSelection();
+    await reader.dismissPopup();
+    await reader.clickHighlight();
+
+    await expect(reader.annotationPopup).toBeVisible();
+    await expect(reader.rangeHandles).toHaveCount(2);
+
+    const layers = await reader.page.evaluate(() => {
+      const handleLayer = document
+        .querySelector('[data-testid="selection-handle"]')
+        ?.closest('div.fixed');
+      const popup = document.querySelector('.selection-popup');
+      return {
+        handles: handleLayer ? getComputedStyle(handleLayer).zIndex : null,
+        popup: popup ? getComputedStyle(popup).zIndex : null,
+      };
+    });
+
+    expect(layers.handles).not.toBeNull();
+    expect(layers.popup).not.toBeNull();
+    expect(Number(layers.handles)).toBeLessThan(Number(layers.popup));
+  });
+
+  test('hides the range-edit handles while the dictionary popup is open (#5815)', async ({
+    openBook,
+  }) => {
+    const reader = await openBook();
+
+    await reader.selectText();
+    await reader.highlightSelection();
+    await reader.dismissPopup();
+    await reader.clickHighlight();
+
+    await expect(reader.annotationPopup).toBeVisible();
+    await expect(reader.rangeHandles).toHaveCount(2);
+
+    await reader.popupTool('Dictionary').click();
+
+    await expect(reader.dictionaryPopup).toBeVisible();
+    await expect(reader.rangeHandles).toHaveCount(0);
+
+    await reader.page.keyboard.press('Escape');
+
+    await expect(reader.dictionaryPopup).toBeHidden();
+    // A highlight tap carries no live selection, so the dismiss is the full
+    // one: no toolbar to return to and no editor to bring back.
+    await expect(reader.annotationPopup).toBeHidden();
+    await expect(reader.rangeHandles).toHaveCount(0);
+  });
+
   test('changes the highlight color', async ({ openBook }) => {
     const reader = await openBook();
 

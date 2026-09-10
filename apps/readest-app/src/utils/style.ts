@@ -308,9 +308,15 @@ const getColorStyles = (
     table:has(> colgroup) {
       table-layout: fixed;
     }
+    /* break-word, never anywhere: overflow-wrap:anywhere (and its legacy alias
+       word-break:break-word) count mid-word break opportunities in min-content
+       sizing, which drops every cell's minimum to a single character. Auto table
+       layout then hands the whole width to the widest column and shreds a short
+       label column into a stack of letters (#5681). break-word leaves intrinsic
+       sizes alone and still breaks a long token that overflows its cell; a table
+       too wide for its column scrolls in its wrapper instead (#4029, #4391). */
     td, th {
-      word-break: break-word;
-      overflow-wrap: anywhere;
+      overflow-wrap: break-word;
     }
     /* code */
     body.theme-dark code {
@@ -430,12 +436,13 @@ const getPageLayoutStyles = (
     display: table !important;
     max-width: 100%;
   }
-  pre, code, math {
+  pre, code {
     white-space: pre-wrap !important;
     scrollbar-width: none;
   }
   math {
     overflow: auto;
+    scrollbar-width: none;
   }
   table, math {
     max-width: calc(var(--available-width) * 1px);
@@ -563,6 +570,12 @@ const getParagraphLayoutStyles = (
   html, body {
     text-align: var(--default-text-align);
   }
+  /* Authored text-wrap: pretty (e.g. Standard Ebooks' core.css) makes engines
+     that justify with it (Safari 26+, recent Chromium) overshoot inter-word
+     gaps and blocks the Word Spacing setting (#5582). Only the style longhand
+     is reset so an authored nowrap mode survives, and only on justified text
+     containers so balanced headings keep their rag. */
+  ${justify ? 'html, body, p, li, blockquote, dd { text-wrap-style: auto !important; }' : ''}
   [align="left"] { text-align: left; }
   [align="right"] { text-align: right; }
   [align="center"] { text-align: center; }
@@ -1086,6 +1099,86 @@ export const transformStylesheet = (
     return selector + block;
   });
 
+  // Fixed-attachment backgrounds anchor to the iframe viewport, which the
+  // paginator lays out as one huge multi-column strip and moves with
+  // transforms, so the image lands far from its element and Blink smears the
+  // text painted over it (#5711). Inside a transformed subtree the spec
+  // demands scroll behavior anyway, so rewrite fixed to scroll. url() tokens
+  // are masked across the sheet before the declaration split: an unquoted
+  // data URI may contain semicolons that would end the declaration match
+  // early, and a quoted url may contain closing parens or the word fixed.
+  // Remaining function tokens (var(), gradients) are masked per value so a
+  // custom property like var(--fixed) is not rewritten either.
+  const urlTokens: string[] = [];
+  css = css.replace(/url\(\s*(?:"[^"]*"|'[^']*'|[^)]*)\s*\)/gi, (url) => {
+    urlTokens.push(url);
+    return `READEST_URL_${urlTokens.length - 1}_PLACEHOLDER`;
+  });
+  css = css.replace(
+    /((?:^|[{;\s])background(?:-attachment)?\s*:)([^;{}]*)/gi,
+    (match, prop: string, value: string) => {
+      if (!/\bfixed\b/i.test(value)) return match;
+      const fns: string[] = [];
+      const masked = value.replace(/[\w-]*\([^)]*\)/g, (fn) => {
+        fns.push(fn);
+        return `READEST_FN_${fns.length - 1}_PLACEHOLDER`;
+      });
+      const rewritten = masked.replace(/\bfixed\b/gi, 'scroll');
+      return prop + rewritten.replace(/READEST_FN_(\d+)_PLACEHOLDER/g, (_, i) => fns[+i]!);
+    },
+  );
+  css = css.replace(/READEST_URL_(\d+)_PLACEHOLDER/g, (_, i) => urlTokens[+i]!);
+
+  // Books authored for Duokan fake full-bleed bands with negative horizontal
+  // margins sized to Duokan's fixed 2em page padding. Columns are not clipped,
+  // so any overhang past the column box paints onto the adjacent page (#5711).
+  // Duokan's layout does not exist here, so drop the trick: zero each
+  // horizontal margin whose resolved value is negative on rules that also
+  // paint a background (hanging indents keep their layout). The band stops at
+  // the column edge instead of full-bleeding, the same rendering the issue
+  // reporter picked as their custom-CSS workaround.
+  if (!vertical) {
+    css = css.replace(ruleRegex, (match, selector, block: string) => {
+      const bgValues = [
+        ...block.matchAll(/(?:^|[^-a-z])background(?:-color|-image)?\s*:\s*([^;!}]+)/gi),
+      ].map((m) => m[1]!.trim());
+      const paints = bgValues.some(
+        (v) =>
+          !/^(?:none|transparent)$/i.test(v) &&
+          !/^(?:rgba|hsla)\([^)]*[,\s]0(?:\.0+)?\s*\)$/i.test(v),
+      );
+      if (!paints) return match;
+      // Resolve each side's final value in declaration order; the shorthand
+      // sets both sides. !important precedence between declarations of the
+      // same block is ignored: getting it wrong can only leave an authored
+      // negative margin in place, never break a valid layout.
+      let left = '';
+      let right = '';
+      for (const decl of block.matchAll(/(?:^|[^-a-z])margin(-left|-right)?\s*:\s*([^;!}]+)/gi)) {
+        const side = decl[1];
+        const value = decl[2]!.trim();
+        if (side === '-left') {
+          left = value;
+        } else if (side === '-right') {
+          right = value;
+        } else {
+          // calc()/var() shorthands are too ambiguous to split on whitespace
+          if (value.includes('(')) continue;
+          const parts = value.split(/\s+/);
+          if (parts.length < 1 || parts.length > 4) continue;
+          const [top, r = top!, , l = r] = parts;
+          right = r!;
+          left = l;
+        }
+      }
+      const overrides =
+        (left.startsWith('-') ? ' margin-left: 0 !important;' : '') +
+        (right.startsWith('-') ? ' margin-right: 0 !important;' : '');
+      if (!overrides) return match;
+      return selector + block.replace(/}$/, `${overrides} }`);
+    });
+  }
+
   // unset font-family for body when set to serif or sans-serif
   css = css.replace(ruleRegex, (_, selector, block) => {
     if (/\bbody\b/i.test(selector)) {
@@ -1190,6 +1283,19 @@ export const applyThemeModeClass = (document: Document, isDarkMode: boolean) => 
 export const applyScrollModeClass = (document: Document, isScrollMode: boolean) => {
   document.body.classList.remove('scroll-mode', 'paginated-mode');
   document.body.classList.add(isScrollMode ? 'scroll-mode' : 'paginated-mode');
+};
+
+/**
+ * Mirror the top document's `data-eink` onto the book document so a user
+ * stylesheet can branch on screen type (#5795). `userStylesheet` is in
+ * SETTINGS_WHITELIST and syncs across devices, while `isEink` is per-device;
+ * without this attribute an e-ink readability tweak (say a text stroke to
+ * thicken a light CJK face) also lands on the user's phone and desktop.
+ * Both values are written, matching useEinkMode, so `html[data-eink='false']`
+ * can carry the LCD-only half of a rule.
+ */
+export const applyEinkModeAttribute = (document: Document, isEink: boolean) => {
+  document.documentElement.setAttribute('data-eink', isEink ? 'true' : 'false');
 };
 
 /**

@@ -6,6 +6,7 @@ export interface ReadestRuntimeConfig {
   storageLimitBytes?: number;
   translationDailyLimit?: number;
   fontBaseUrl?: string;
+  selfHosted?: boolean;
 }
 
 declare global {
@@ -33,6 +34,8 @@ export const getServerRuntimeConfig = (): ReadestRuntimeConfig => ({
   // the published image can be configured without rebuilding.
   objectStorageType:
     process.env['OBJECT_STORAGE_TYPE'] ?? process.env['NEXT_PUBLIC_OBJECT_STORAGE_TYPE'],
+  selfHosted:
+    (process.env['SELF_HOSTED'] || process.env['NEXT_PUBLIC_SELF_HOSTED']) === 'true' || undefined,
   storageLimitBytes: (() => {
     const raw =
       process.env['STORAGE_LIMIT_BYTES'] ??

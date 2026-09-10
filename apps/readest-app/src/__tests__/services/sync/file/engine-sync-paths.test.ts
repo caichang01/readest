@@ -9,9 +9,9 @@ import type { RemoteBookConfig, RemoteLibraryIndex } from '@/services/sync/file/
 /**
  * Coverage for the engine paths the behavior-preservation gate
  * (engine-metadata-sync) does not execute: streaming upload + HEAD
- * short-circuit, remote-only discovery -> streaming download -> addBook, and
- * the receive (pull-only) strategy. These carry the OOM-avoidance and
- * idempotency value of the original WebDAV sync.
+ * short-circuit, remote-only discovery -> metadata-only shelf addition,
+ * explicit streaming download, and the receive (pull-only) strategy. These
+ * carry the OOM-avoidance and idempotency value of the original WebDAV sync.
  */
 
 const makeBook = (hash: string, overrides: Partial<Book> = {}): Book => ({
@@ -110,10 +110,53 @@ describe('FileSyncEngine.pushBookFile — streaming upload', () => {
   });
 });
 
-describe('FileSyncEngine.syncLibrary — remote discovery + streaming download', () => {
-  test('discovers a remote-only book, streams it down, and adds it to the library', async () => {
+// pushBookFile is called both from syncLibrary's guarded push loop AND
+// directly by the explicit per-book Upload action (runFileBookUpload), which
+// bypasses needsFilePush entirely. It needs its own ABS guard so a direct
+// call can never probe the synthetic abs:// path, regardless of caller.
+describe('FileSyncEngine.pushBookFile — ABS books never push a file (direct call)', () => {
+  test('short-circuits before touching the store or the provider', async () => {
+    const uploadStream = vi.fn(async () => true);
+    const head = vi.fn(async () => null);
+    const provider = fakeProvider({ head, uploadStream });
+    // Even if the store layer claimed a local source existed (e.g. a bug, or
+    // a stale row), the ABS guard must win — it is checked before any store
+    // call is made.
+    const resolveLocalBookPath = vi.fn(async () => ({ path: '/local/x.abs', size: 100 }));
+    const loadBookFile = vi.fn(async () => ({ bytes: new ArrayBuffer(10), size: 10 }));
+    const store = fakeStore({ resolveLocalBookPath, loadBookFile });
+
+    const res = await new FileSyncEngine(provider, store).pushBookFile(
+      makeBook('h1', { format: 'ABS', filePath: 'abs://server-1/item-abc' }),
+    );
+
+    expect(res).toEqual({ uploaded: false, reason: 'no-source' });
+    expect(resolveLocalBookPath).not.toHaveBeenCalled();
+    expect(loadBookFile).not.toHaveBeenCalled();
+    expect(head).not.toHaveBeenCalled();
+    expect(uploadStream).not.toHaveBeenCalled();
+  });
+});
+
+describe('FileSyncEngine.syncLibrary — remote discovery + cloud shelf (#5009)', () => {
+  test('adds a remote-only book as metadata without downloading its file', async () => {
     const downloadStream = vi.fn(async () => true);
+    const readBinary = vi.fn(async (path: string) =>
+      path.endsWith('/cover.png') ? new ArrayBuffer(3) : null,
+    );
+    const remoteConfig: RemoteBookConfig = {
+      schemaVersion: 1,
+      bookHash: 'h2',
+      config: { progress: [2, 10], updatedAt: 20 },
+      booknotes: [],
+      writerDeviceId: 'peer',
+      writerVersion: 'readest-webdav-1',
+      updatedAt: 20,
+    };
     const provider = fakeProvider({
+      readText: async (path: string) =>
+        path.endsWith('/config.json') ? JSON.stringify(remoteConfig) : null,
+      readBinary,
       list: async (path: string) =>
         path.endsWith('/books')
           ? [{ name: 'h2', path: '/Readest/books/h2', isDirectory: true }]
@@ -129,10 +172,13 @@ describe('FileSyncEngine.syncLibrary — remote discovery + streaming download',
     });
     const addBookToLibrary = vi.fn<(book: Book) => Promise<void>>(async () => {});
     const prepareLocalBookPath = vi.fn(async () => '/local/h2/Remote.epub');
+    const saveBookCover = vi.fn(async () => {});
+    const saveBookConfig = vi.fn(async () => {});
     const store = fakeStore({
       addBookToLibrary,
       prepareLocalBookPath,
-      resolveLocalBookPath: async () => ({ path: '/local/h2/Remote.epub', size: 50 }),
+      saveBookCover,
+      saveBookConfig,
     });
 
     const res = await new FileSyncEngine(provider, store).syncLibrary([], {
@@ -141,16 +187,70 @@ describe('FileSyncEngine.syncLibrary — remote discovery + streaming download',
       deviceId: 'd',
     });
 
-    expect(downloadStream).toHaveBeenCalledWith(
-      '/Readest/books/h2/Remote.epub',
-      '/local/h2/Remote.epub',
+    expect(downloadStream).not.toHaveBeenCalled();
+    expect(prepareLocalBookPath).not.toHaveBeenCalled();
+    expect(readBinary).toHaveBeenCalledTimes(1);
+    expect(readBinary).toHaveBeenCalledWith('/Readest/books/h2/cover.png');
+    expect(saveBookCover).toHaveBeenCalledTimes(1);
+    expect(saveBookConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ hash: 'h2' }),
+      expect.objectContaining({ progress: [2, 10] }),
     );
     expect(addBookToLibrary).toHaveBeenCalledTimes(1);
-    expect(addBookToLibrary.mock.calls[0]![0].hash).toBe('h2');
-    expect(res.booksDownloaded).toBe(1);
+    expect(addBookToLibrary.mock.calls[0]![0]).toMatchObject({
+      hash: 'h2',
+      downloadedAt: null,
+    });
+    expect(addBookToLibrary.mock.calls[0]![0].uploadedAt).toEqual(expect.any(Number));
+    expect(addBookToLibrary.mock.calls[0]![0].coverDownloadedAt).toEqual(expect.any(Number));
+    expect(res.configsDownloaded).toBe(1);
+    expect(res.booksAdded).toBe(1);
   });
 
-  test('rejects a remote-only streaming download whose local size is incomplete', async () => {
+  test('still adds the cloud-shelf row when optional cover and config pulls fail', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const provider = fakeProvider({
+      readText: async (path: string) => {
+        if (path.endsWith('/config.json')) throw new Error('config unavailable');
+        return null;
+      },
+      readBinary: async () => {
+        throw new Error('cover unavailable');
+      },
+      list: async (path: string) =>
+        path.endsWith('/books')
+          ? [{ name: 'h2', path: '/Readest/books/h2', isDirectory: true }]
+          : [
+              {
+                name: 'Remote.epub',
+                path: '/Readest/books/h2/Remote.epub',
+                isDirectory: false,
+                size: 50,
+              },
+            ],
+    });
+    const addBookToLibrary = vi.fn<(book: Book) => Promise<void>>(async () => {});
+
+    const res = await new FileSyncEngine(provider, fakeStore({ addBookToLibrary })).syncLibrary(
+      [],
+      {
+        strategy: 'silent',
+        syncBooks: false,
+        deviceId: 'd',
+      },
+    );
+
+    expect(addBookToLibrary).toHaveBeenCalledWith(
+      expect.objectContaining({ hash: 'h2', uploadedAt: expect.any(Number), downloadedAt: null }),
+    );
+    expect(res.booksAdded).toBe(1);
+    expect(res.failures).toBe(0);
+    expect(warn).toHaveBeenCalledWith('file sync: cover download failed', 'h2', expect.any(Error));
+    expect(warn).toHaveBeenCalledWith('file sync: config download failed', 'h2', expect.any(Error));
+    warn.mockRestore();
+  });
+
+  test('discovers metadata lazily but rejects incomplete bytes on explicit download', async () => {
     const downloadStream = vi.fn(async () => true);
     const addBookToLibrary = vi.fn<(book: Book) => Promise<void>>(async () => {});
     const provider = fakeProvider({
@@ -178,10 +278,14 @@ describe('FileSyncEngine.syncLibrary — remote discovery + streaming download',
       deviceId: 'd',
     });
 
-    expect(addBookToLibrary).not.toHaveBeenCalled();
+    expect(addBookToLibrary).toHaveBeenCalledTimes(1);
+    expect(res.booksAdded).toBe(1);
     expect(res.booksDownloaded).toBe(0);
-    expect(res.failures).toBe(1);
-    expect(res.failedBooks[0]?.reason).toContain('size');
+    expect(downloadStream).not.toHaveBeenCalled();
+    const discovered = addBookToLibrary.mock.calls[0]![0];
+    const downloaded = await new FileSyncEngine(provider, store).downloadBookFile(discovered);
+    expect(downloaded).toBe(false);
+    expect(discovered.downloadedAt).toBeNull();
   });
 });
 
@@ -246,7 +350,34 @@ describe('FileSyncEngine.downloadBookFile', () => {
     const ok = await new FileSyncEngine(provider, store).downloadBookFile(makeBook('h1'));
 
     expect(ok).toBe(true);
-    expect(downloadStream).toHaveBeenCalledWith('/Readest/books/h1/B.epub', '/local/h1/B.epub');
+    expect(downloadStream).toHaveBeenCalledWith(
+      '/Readest/books/h1/B.epub',
+      '/local/h1/B.epub',
+      undefined,
+    );
+  });
+
+  test('forwards an onProgress handler to the streaming downloader', async () => {
+    const onProgress = vi.fn();
+    const downloadStream = vi.fn(async () => true);
+    const prepareLocalBookPath = vi.fn(async () => '/local/h1/B.epub');
+    const provider = fakeProvider({ list: hashDirListing(true), downloadStream });
+    const store = fakeStore({
+      prepareLocalBookPath,
+      resolveLocalBookPath: async () => ({ path: '/local/h1/B.epub', size: 9 }),
+    });
+
+    const ok = await new FileSyncEngine(provider, store).downloadBookFile(
+      makeBook('h1'),
+      onProgress,
+    );
+
+    expect(ok).toBe(true);
+    expect(downloadStream).toHaveBeenCalledWith(
+      '/Readest/books/h1/B.epub',
+      '/local/h1/B.epub',
+      onProgress,
+    );
   });
 
   test('returns false when a streaming download is shorter than the remote object', async () => {
@@ -792,7 +923,7 @@ describe('FileSyncEngine.syncLibrary — empty-dir record', () => {
     });
     const res = await new FileSyncEngine(provider, fakeStore()).syncLibrary([], opts);
 
-    expect(res.booksDownloaded).toBe(0);
+    expect(res.booksAdded).toBe(0);
     const idx = JSON.parse(
       captured.writes.find((w) => w.path.endsWith('library.json'))!.body,
     ) as RemoteLibraryIndex;
@@ -844,7 +975,7 @@ describe('FileSyncEngine.syncLibrary — empty-dir record', () => {
       }),
     ).syncLibrary([], opts);
 
-    expect(res.booksDownloaded).toBe(1);
+    expect(res.booksAdded).toBe(1);
     const idx = JSON.parse(
       captured.writes.find((w) => w.path.endsWith('library.json'))!.body,
     ) as RemoteLibraryIndex;
@@ -889,8 +1020,8 @@ describe('FileSyncEngine.syncLibrary — row-as-truth local file gate', () => {
     expect(head).not.toHaveBeenCalledWith(expect.stringContaining('/books/'));
   });
 
-  test('repairs an uploaded book whose local file vanished even when the index ETag is unchanged', async () => {
-    const remoteBook = makeBook('h1', { updatedAt: 100, uploadedAt: 10, downloadedAt: 10 });
+  test('does not eagerly restore a removed local copy, but explicit download verifies and restores it', async () => {
+    const remoteBook = makeBook('h1', { updatedAt: 100, uploadedAt: 10, downloadedAt: null });
     const head = vi.fn(async (p: string) =>
       p.endsWith('library.json') ? { etag: 'unchanged-index' } : null,
     );
@@ -920,9 +1051,7 @@ describe('FileSyncEngine.syncLibrary — row-as-truth local file gate', () => {
     });
     const resolveLocalBookPath = vi
       .fn<LocalStore['resolveLocalBookPath']>()
-      .mockResolvedValueOnce({ path: '/local/h1/Book h1.epub', size: 50 })
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ path: '/local/h1/Book h1.epub', size: 50 });
+      .mockResolvedValue({ path: '/local/h1/Book h1.epub', size: 50 });
     const updateBookMetadata = vi.fn(async () => {});
     const store = fakeStore({ resolveLocalBookPath, updateBookMetadata });
     const options = {
@@ -934,14 +1063,14 @@ describe('FileSyncEngine.syncLibrary — row-as-truth local file gate', () => {
     await new FileSyncEngine(provider, store).syncLibrary([remoteBook], options);
     const result = await new FileSyncEngine(provider, store).syncLibrary([remoteBook], options);
 
-    expect(downloadStream).toHaveBeenCalledWith(
-      '/Readest/books/h1/Book h1.epub',
-      expect.any(String),
-    );
-    expect(updateBookMetadata).toHaveBeenCalledWith(
-      expect.objectContaining({ hash: 'h1', downloadedAt: expect.any(Number) }),
-    );
-    expect(result.booksDownloaded).toBe(1);
+    expect(downloadStream).not.toHaveBeenCalled();
+    expect(resolveLocalBookPath).not.toHaveBeenCalled();
+    expect(result.booksDownloaded).toBe(0);
+
+    const restored = await new FileSyncEngine(provider, store).downloadBookFile(remoteBook);
+    expect(restored).toBe(true);
+    expect(downloadStream).toHaveBeenCalledTimes(1);
+    expect(resolveLocalBookPath).toHaveBeenCalledWith(remoteBook);
   });
 });
 
@@ -1014,6 +1143,72 @@ describe('FileSyncEngine.syncLibrary — no-source probe memo', () => {
       { ...opts, fullSync: true },
     );
     expect(h.loadBookFile).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ABS books stream from an Audiobookshelf server and never have a local or
+// remote file — `filePath` is a synthetic `abs://<serverId>/<itemId>` marker,
+// not a real path. The engine must never treat it as "this device holds the
+// file" (which would schedule a doomed push attempt), in incremental sync OR
+// full sync (which otherwise bypasses the local-file gate entirely). Config
+// sync is unaffected: an ABS book's title/author/tags still replicate.
+describe('FileSyncEngine.syncLibrary — ABS books never push a file', () => {
+  test('incremental sync never probes for a file despite a synthetic filePath', async () => {
+    const provider = fakeProvider({
+      head: async (p: string) => (p.endsWith('library.json') ? { etag: 'E1' } : null),
+      readText: async (p) =>
+        p.endsWith('library.json')
+          ? JSON.stringify(makeIndex([makeBook('h1', { format: 'ABS', updatedAt: 100 })]))
+          : null,
+      captured: { writes: [] },
+    });
+    const loadBookFile = vi.fn(async () => null);
+    const resolveLocalBookPath = vi.fn(async () => null);
+    const store = fakeStore({
+      loadConfig: async () => ({ updatedAt: 1, booknotes: [] }),
+      loadBookFile,
+      resolveLocalBookPath,
+    });
+
+    const res = await new FileSyncEngine(provider, store).syncLibrary(
+      [makeBook('h1', { format: 'ABS', updatedAt: 200, filePath: 'abs://server-1/item-abc' })],
+      { strategy: 'silent', syncBooks: true, deviceId: 'd' },
+    );
+
+    // Neither book-file loader is ever consulted — pushBookFile never runs
+    // for an ABS book, so it never HEAD-probes the (nonexistent) binary either.
+    expect(loadBookFile).not.toHaveBeenCalled();
+    expect(resolveLocalBookPath).not.toHaveBeenCalled();
+    expect(res.filesUploaded).toBe(0);
+    // Metadata/config still sync normally for an ABS book.
+    expect(res.configsUploaded).toBe(1);
+  });
+
+  test('full sync (which bypasses the local-file gate) still skips the file for ABS books', async () => {
+    const provider = fakeProvider({
+      readText: async (p) =>
+        p.endsWith('library.json')
+          ? JSON.stringify(makeIndex([makeBook('h1', { format: 'ABS', updatedAt: 100 })]))
+          : null,
+      captured: { writes: [] },
+    });
+    const loadBookFile = vi.fn(async () => null);
+    const resolveLocalBookPath = vi.fn(async () => null);
+    const store = fakeStore({
+      loadConfig: async () => ({ updatedAt: 1, booknotes: [] }),
+      loadBookFile,
+      resolveLocalBookPath,
+    });
+
+    const res = await new FileSyncEngine(provider, store).syncLibrary(
+      [makeBook('h1', { format: 'ABS', updatedAt: 100, filePath: 'abs://server-1/item-abc' })],
+      { strategy: 'silent', syncBooks: true, deviceId: 'd', fullSync: true },
+    );
+
+    expect(loadBookFile).not.toHaveBeenCalled();
+    expect(resolveLocalBookPath).not.toHaveBeenCalled();
+    expect(res.filesUploaded).toBe(0);
+    expect(res.configsUploaded).toBe(1);
   });
 });
 

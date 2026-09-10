@@ -10,7 +10,7 @@ It does not start another PostgreSQL, Auth, Kong, Storage, or Studio stack.
 
 - `../init/schema.sql`;
 - migrations `002` through `012`, excluding no files within that range;
-- migration `014`.
+- migration `014`, plus `020` through `024`.
 
 The following historical migrations are intentionally not replayed:
 
@@ -20,8 +20,9 @@ The following historical migrations are intentionally not replayed:
   trigger are already represented in `schema.sql`.
 
 The assembled baseline runs in one transaction. It records
-`20260813_self_hosted_baseline_019` and the folded
-`018_add_storage_stats_rpc` and `019_add_metadata_updated_at` migrations in
+`20260902_self_hosted_baseline_024` and the folded
+`018_add_storage_stats_rpc` and `019_add_metadata_updated_at` migrations, plus
+the applied `020` through `024` migrations, in
 `readest_internal.schema_migrations`. A repeated run exits successfully
 without changing the database. If Readest tables exist without that record,
 the script stops instead of guessing whether the database is partially
@@ -64,7 +65,7 @@ sudo -iu postgres psql -d postgres -X -v ON_ERROR_STOP=1 \
   < docker/volumes/db/self-hosted/verify.sql
 ```
 
-## Upgrade an existing baseline 017 or 018 deployment
+## Upgrade an existing baseline 017, 018, or 019 deployment
 
 Take a PostgreSQL backup first. Do not rerun `bootstrap.sh` against the existing
 Readest tables.
@@ -89,14 +90,14 @@ docker/volumes/db/self-hosted/upgrade.sh \
   sudo -iu postgres psql -d postgres -X
 ```
 
-The upgrade runner accepts baseline 017, 018, or 019, checks the migration ledger,
+The upgrade runner accepts baseline 017, 018, 019, or 024, checks the migration ledger,
 applies only unapplied forward migrations in one transaction, records
-`018_add_storage_stats_rpc` and `019_add_metadata_updated_at` as needed, and
+all migrations from `018` through `024` as needed, and
 notifies PostgREST to reload its schema cache.
 A repeated run exits successfully without changing the database.
 
-Run `verify.sql` afterward. It checks both migration records, the metadata
-column, the RPC signature, absence of `PUBLIC` execute permission, and the
+Run `verify.sql` afterward. It checks migration records, the metadata and group
+clocks, RPC signatures, absence of `PUBLIC` execute permission, and the
 `service_role` function and table grants in addition to the existing table,
 RLS, and replica checks.
 
@@ -114,13 +115,13 @@ docker/volumes/db/self-hosted/deploy-remote-upgrade.sh \
 
 Replace `rockyadmin@database-server` with an SSH config alias or the actual
 `USER@HOST`. Use `--port PORT` for a non-default SSH port. By default the helper
-creates a timestamped `readest-db-019-*` directory below the remote user's home
+creates a timestamped `readest-db-024-*` directory below the remote user's home
 directory; `--remote-dir /absolute/path` can select another safe staging path.
 
 The helper:
 
 1. refuses to proceed without the explicit `--backup-completed` acknowledgement;
-2. uploads only migrations 018/019, `upgrade.sh`, and `verify.sql`;
+2. uploads only migrations 018–024, `upgrade.sh`, and `verify.sql`;
 3. runs the forward upgrade as the PostgreSQL operating-system user;
 4. runs the independent verification with `ON_ERROR_STOP=1`;
 5. retains the remote staging directory for audit or repeat verification.

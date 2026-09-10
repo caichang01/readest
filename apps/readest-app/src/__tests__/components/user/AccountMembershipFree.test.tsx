@@ -25,6 +25,7 @@ describe('subscription-free account surfaces', () => {
         onResetPassword={vi.fn()}
         onUpdateEmail={vi.fn()}
         onConfirmDelete={vi.fn()}
+        onConfirmDeleteAllBooks={vi.fn()}
         onManageStorage={vi.fn()}
         onManageSharedLinks={vi.fn()}
         onManageSync={vi.fn()}

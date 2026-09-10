@@ -7,6 +7,13 @@ const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const pathFromRoot = (path) => `${repositoryRoot}${path}`;
 const readFromRoot = (path) => readFileSync(pathFromRoot(path), 'utf8');
 
+test('optional upstream agent tooling is not fetched by recursive application builds', () => {
+  const modules = readFromRoot('.gitmodules');
+  const entry = modules.split(/(?=\[submodule )/).find((block) => block.includes('skills/gstack'));
+  assert.ok(entry);
+  assert.match(entry, /^\s*update\s*=\s*none\s*$/m);
+});
+
 test('only reviewed fork workflows are active', () => {
   const activeWorkflows = readdirSync(pathFromRoot('.github/workflows'))
     .filter((name) => /\.ya?ml$/.test(name))
@@ -63,6 +70,7 @@ test('self-hosted deployment, S3 recovery, and updater trust assets remain prese
     'docker/compose.external-supabase.yaml',
     'docker/volumes/db/migrations/018_add_storage_stats_rpc.sql',
     'docker/volumes/db/migrations/019_add_metadata_updated_at.sql',
+    'docker/volumes/db/migrations/024_replica_abs_server.sql',
     'docker/volumes/db/self-hosted/verify.sql',
   ];
 

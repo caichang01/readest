@@ -51,7 +51,7 @@ PATH="$BIN_DIR:$PATH" COMMAND_LOG="$LOG_FILE" \
   "$DEPLOY_SCRIPT" \
   --host tester@db.example.test \
   --port 2222 \
-  --remote-dir /home/tester/readest-db-019-test \
+  --remote-dir /home/tester/readest-db-023-test \
   --backup-completed >/dev/null
 
 assert_log_contains() {
@@ -72,10 +72,10 @@ assert_log_not_contains() {
   fi
 }
 
-assert_log_contains "ssh <-p> <2222> <tester@db.example.test> <mkdir -p -- '/home/tester/readest-db-019-test/migrations' '/home/tester/readest-db-019-test/self-hosted'>"
+assert_log_contains "ssh <-p> <2222> <tester@db.example.test> <mkdir -p -- '/home/tester/readest-db-023-test/migrations' '/home/tester/readest-db-023-test/self-hosted'>"
 assert_log_contains 'scp <-P> <2222>'
-assert_log_contains '<tester@db.example.test:/home/tester/readest-db-019-test/migrations/>'
-assert_log_contains '<tester@db.example.test:/home/tester/readest-db-019-test/self-hosted/>'
+assert_log_contains '<tester@db.example.test:/home/tester/readest-db-023-test/migrations/>'
+assert_log_contains '<tester@db.example.test:/home/tester/readest-db-023-test/self-hosted/>'
 assert_log_contains './self-hosted/upgrade.sh sudo -iu postgres psql -d postgres -X'
 assert_log_contains "sudo -iu postgres psql -d postgres -X -v ON_ERROR_STOP=1 < self-hosted/verify.sql"
 assert_log_not_contains 'bootstrap.sh'
@@ -88,7 +88,8 @@ PATH="$BIN_DIR:$PATH" COMMAND_LOG="$LOG_FILE" \
   --backup-completed >/dev/null
 
 assert_log_contains 'ssh <tester@db.example.test> <printf "%s" "$HOME">'
-assert_log_contains '<tester@db.example.test:/home/tester/readest-db-019-'
+assert_log_contains '<tester@db.example.test:/home/tester/readest-db-024-'
+assert_log_contains '024_replica_abs_server.sql'
 assert_log_not_contains '<-p>'
 assert_log_not_contains '<-P>'
 
