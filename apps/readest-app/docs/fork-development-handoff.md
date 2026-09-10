@@ -1026,8 +1026,12 @@ macOS 和 Web 修复。这些能力仍需通过候选安装包验证，不能仅
   未适配 fork 签名清单/mock。已修正测试契约，不放宽实际验签或会员移除要求。
 - 最终全量复跑：900 个文件通过、1 个文件跳过；10896 项通过、10 项预期跳过、0 失败。
 
-当前准备提交并推送候选、触发非发布安装包 CI；不能据本节宣称 Linux CEF
-安装包已构建或真机通过。Actions 结果在完成后补充。
+候选合并提交 `a6add29f6b54fdaf667cdb84eb1058b7831e8f31` 已推送。
+[安装包 Actions 34445080492](https://github.com/caichang01/readest/actions/runs/34445080492)
+以 `publish_release=false` 运行，
+[Web/API Actions 34445079087](https://github.com/caichang01/readest/actions/runs/34445079087)
+自动启动。两者目前均在运行中；不能据本节宣称 Linux CEF 安装包已构建或真机通过。
+后续文档提交不改变这些候选产物对应的精确应用 SHA，最终 Actions 结果待补充。
 
 ## 4. S3 跨设备“无法打开书籍”调查
 
