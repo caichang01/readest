@@ -20,6 +20,22 @@ test('fork release signs Android packages and publishes a generated latest manif
   assert.match(workflow, /latest\.json/);
 });
 
+test('Android SDK setup only requests supported bootstrap packages', () => {
+  const setupStep = workflow.match(
+    /- name: Set up Android SDK\n(?<step>[\s\S]*?)(?=\n      - name:)/,
+  )?.groups?.step;
+  assert.ok(setupStep);
+  assert.match(setupStep, /^\s*packages:[ \t]*platform-tools[ \t]*$/m);
+
+  const sdkPackagesStep = workflow.match(
+    /- name: Install Android SDK packages\n(?<step>[\s\S]*?)(?=\n      - name:)/,
+  )?.groups?.step;
+  assert.ok(sdkPackagesStep);
+  assert.match(sdkPackagesStep, /"platforms;android-36"/);
+  assert.match(sdkPackagesStep, /"build-tools;35\.0\.0"/);
+  assert.match(sdkPackagesStep, /"ndk;\$\{NDK_VERSION\}"/);
+});
+
 test('desktop updater builds use the generated fork-only Tauri overlay', () => {
   assert.match(workflow, /fork-ci-tauri-config\.generated\.json/);
   assert.doesNotMatch(workflow, /--config src-tauri\/fork-ci-tauri-config\.json(?:\s|$)/);

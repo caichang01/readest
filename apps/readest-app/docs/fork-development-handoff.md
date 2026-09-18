@@ -1037,6 +1037,30 @@ macOS 和 Web 修复。这些能力仍需通过候选安装包验证，不能仅
 本次整合只补充验收文档，不改变已验证应用代码；不重复运行同一代码的完整测试。
 正式主线构建及 Release 是否完成，应以合并后的 Actions 实时状态为准。
 
+### 3.7.4 2026-09-18 Android SDK 初始化修复与 0.12.8 发布补齐
+
+主线 `1d6a453a0` 的 installer run `35301412475` 中，Windows x64/ARM64、Linux
+x64/ARM64（CEF）和 macOS Universal 均成功；Android 在 setup-android 阶段失败，
+Release 作业因此跳过。镜像 run `35301412402` 成功，`v0.12.8` Release 尚未创建。
+
+根因：固定的 `android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699`
+默认 `packages: tools platform-tools`，SDK 仓库返回 `Failed to find package 'tools'`。
+错误发生在应用编译和签名前，与 Linux CEF、会员移除、S3 或 Supabase 无关。
+
+用户同意先单独修复并补齐 0.12.8 发布，再继续上游新增 31 个提交。修复分支为
+`codex/fix-android-sdk-setup`，仅将初始化包列表显式设为 `platform-tools`；保留独立
+sdkmanager 步骤安装 Android 36、Build Tools 35.0.0、既有 NDK。应用代码、版本号和
+签名密钥不变。新增契约测试防止依赖 action 默认值再次安装已不可用的旧工具包。
+
+本地验证：回归测试先失败后通过，全部 fork 脚本测试 28 项通过；YAML 解析及
+Android 初始化参数独立校验通过。审查未发现实现问题；已采纳测试断言必须精确匹配
+整行的建议，防止 `platform-tools tools` 再次混入。未修改应用代码，复用上一轮应用
+全量与真机验收结果；本次仍需 hosted runner 验证实际 SDK 安装。
+
+候选构建、合并和正式 Release 的最终结果待验证后补充。由于版本
+仍为 0.12.8，修复合并本身不会触发版本变化发布；需在验证通过后使用既有
+`publish_release=true` 手动发布入口，不能只重跑旧 SHA 的失败任务。
+
 ## 4. S3 跨设备“无法打开书籍”调查
 
 ### 4.1 用户现象
