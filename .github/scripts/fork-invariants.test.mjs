@@ -45,6 +45,8 @@ test('membership, quota, payment, and IAP implementations stay removed', () => {
     'apps/readest-app/src/components/settings/IntegrationsPanel.tsx',
     'apps/readest-app/src/app/user/page.tsx',
     'apps/readest-app/src/app/user/components/AccountActions.tsx',
+    'apps/readest-app/src/components/localsend/LocalSendManager.tsx',
+    'apps/readest-app/src/components/localsend/ReceiveRequestDialog.tsx',
   ];
 
   for (const path of ungatedSurfaces) {

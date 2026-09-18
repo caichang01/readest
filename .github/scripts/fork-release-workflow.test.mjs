@@ -30,12 +30,13 @@ test('desktop updater builds use the generated fork-only Tauri overlay', () => {
 test('Linux AppImage builds use pinned and verified bundler inputs', () => {
   assert.match(
     workflow,
-    /TAURI_PORTABLE_APPIMAGE_REV:\s*[0-9a-f]{40}/,
+    /TAURI_CEF_REV:\s*[0-9a-f]{40}/,
   );
   assert.match(workflow, /QUICK_SHARUN_REV:\s*[0-9a-f]{40}/);
   assert.match(workflow, /QUICK_SHARUN_SHA256:\s*[0-9a-f]{64}/);
   assert.doesNotMatch(workflow, /--branch feat\/truly-portable-appimage/);
-  assert.match(workflow, /git -C .* apply .*tauri-portable-appimage\.patch/s);
+  assert.match(workflow, /git -C .* apply .*tauri-cef-appimage\.patch/s);
+  assert.match(workflow, /TAURI_CEF_CARGO: "1"/);
   assert.match(workflow, /curl .*--connect-timeout .*--max-time/s);
   assert.match(
     workflow,
@@ -43,10 +44,13 @@ test('Linux AppImage builds use pinned and verified bundler inputs', () => {
   );
   assert.doesNotMatch(workflow, /raw\.githubusercontent\.com/);
   assert.match(workflow, /sha256sum --check/);
-  assert.match(workflow, /timeout --signal=TERM --kill-after=30s 50m cargo tauri build/);
+  assert.match(workflow, /timeout --signal=TERM --kill-after=30s 50m pnpm tauri build/);
+  assert.match(workflow, /--locked/);
+  assert.match(workflow, /libxkbcommon-x11\.so\.0/);
+  assert.match(workflow, /libcef\.so/);
 
   const bundlerPatch = readFileSync(
-    new URL('../patches/tauri-portable-appimage.patch', import.meta.url),
+    new URL('../patches/tauri-cef-appimage.patch', import.meta.url),
     'utf8',
   );
   assert.match(bundlerPatch, /quick-sharun\.sh was not preloaded/);

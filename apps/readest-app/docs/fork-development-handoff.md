@@ -1,6 +1,6 @@
 # Readest fork 二次开发交接记录
 
-最后更新：2026-09-10
+最后更新：2026-09-18
 
 这份文档记录本 fork 相对上游 Readest 的产品目标、已经完成的改造、验证结果、已知问题和后续计划。开始新的 fork 专属开发前，应先阅读本文；完成一个阶段后，应同步更新日期、提交、测试结果和未完成事项。
 
@@ -19,7 +19,10 @@
 - 第二轮 `0.12.1` 同步已完成用户验收，2026-08-26 经 `3b0eebb6` 合并至 master，
   两条 fork Actions 和 `v0.12.1` Release 均已成功。
 - 第三轮分支 `codex/upstream-sync-20260902`（上游 `0.12.6`）已完成候选构建，
-  2026-09-10 用户授权合并 master；本次合并包含部署教程，生产升级仍由用户执行，详见 3.7.2。
+  2026-09-10 经 `0d20e156e` 合并并推送 master；生产升级仍由用户执行，详见 3.7.2。
+- 第四轮 `codex/upstream-sync-20260910`（`0.12.8`）的候选构建均成功，用户于
+  2026-09-18 确认验收通过并授权合并、推送 master。Linux 跟进 CEF，其他平台保留
+  现有 WebView；详见 3.7.3。
 - 正式修复分支保留为 `codex/fix-s3-book-recovery`，核心提交为 `2bae62ab fix: recover incomplete synced books`，真机验收记录为 `9ef8f2f5 docs: record S3 recovery device validation`。
 - 每次继续开发前仍应先获取并核对 `origin/master`，不要只依赖本文记录判断远端是否有新提交。
 - 本地 `artifacts/` 目录只存放测试安装包，未纳入 Git。
@@ -962,6 +965,8 @@ macOS 和 Web 修复。这些能力仍需通过候选安装包验证，不能仅
 与 [Web/API Actions](https://github.com/caichang01/readest/actions/runs/33599990334)
 均成功。安装包覆盖 Android、Windows x64/ARM64、Linux x64/ARM64、macOS Universal；
 候选运行未发布 Release。用户已授权合并 master，主线推送后由流水线构建并按版本发布。
+主线合并提交为 `0d20e156e`；安装包 run `34429915050` 和镜像 run `34429915037`
+均成功，正式 `v0.12.6` Release 已发布（非 draft、非 prerelease）。
 生产数据库迁移和镜像部署尚未代用户执行，操作见
 [QNAP 与 Pigsty 升级教程](../../../docker/UPGRADE_0.12.6_QNAP_PIGSTY.md)。
 
@@ -974,6 +979,63 @@ macOS 和 Web 修复。这些能力仍需通过候选安装包验证，不能仅
 
 每周任务说明已写入 [upstream-sync-runbook.md](upstream-sync-runbook.md)。本会话定时任务
 接口不可用，**尚未创建或启用定时任务**；不得据此宣称每周自动执行已经运行。
+
+### 3.7.3 2026-09-10 第四轮受控同步：0.12.8 与 Linux CEF
+
+- 分支：`codex/upstream-sync-20260910`，起点 `0d20e156e841408f9749e293877873c6df816c83`。
+- 共同祖先：`6df90139dc7b72246572ab33b12d485b281ca6e6`。
+- 官方目标：`1b681939dc80af8998d082829ed516d66f8f600f`，版本 `0.12.8`，新增 84 个提交。
+- `origin/upstream` 已纯快进到该官方目标；不混入 fork 代码、不强推。
+- worktree 脚本仍硬编码 `origin/main` 并自动 rebase，按 1.2 节既有回退约定在干净的
+  tracked 工作区创建独立分支，未使用该脚本重写历史。
+- 初始 7 处冲突：访问策略、账户页面、集成页面、同步引擎、云同步测试、Docker 文档、
+  pnpm 锁文件。原本未跟踪的 `.pnpm-store/`、`artifacts/` 保留；上游移除的两个子模块
+  `packages/tao/`、`packages/tauri-plugins/` 的本机目录未删除，也不得重新加入提交。
+
+兼容决定：
+
+1. Linux CEF 已获用户明确批准。`scripts/tauri.mjs` 只将 Linux 的 dev/build/bundle
+   分流到 CEF；Android/iOS 构建命令与 macOS/Windows 仍用原来的 wry 内核。
+2. 保留两套 Cargo 锁文件，Linux CI 通过 `--locked` 固定解析；共享 Rust 最低版本
+   提升到 1.90，Linux CEF 工具链要求至少 1.95。CEF CLI 固定为 `2b8315bd14882471b6567b1ceba84c0c0238f156`，
+   不跟随浮动分支安装。新补丁只允许使用预加载且通过哈希验证的 quick-sharun。
+3. quick-sharun 固定 `53a05bc37f0d5241fe7ce3c7daee20fd93e26750`；SHA-256
+   `4a24616f07ff4e9ab908ef17d5ae6e32fe4b697aa21bcd1cd956032648a553d9` 已实测匹配。
+   下载重试/超时、50 分钟构建上限保留；增加 CEF/NSS/音频/X11 库打包检查。
+   helper 内部仍有跟随 latest 下载的工具，因此不能宣称所有传递构建输入完全可复现。
+4. 上游新出现的 `try-appimage.yml` 也移入禁用目录，活动流水线仍只有 fork 两条。
+   fork endpoint、公钥、长期 Android 签名、updater 签名和非发布候选模式不变。
+5. 无会员策略保持不变：删除上游重新引入的套餐判断，以及 Nearby BookDrop 配对的
+   付费限制。配对仍必须由用户主动选择，自动接收仍要求已配对且 TLS 证书验证通过；
+   不信任只有请求 body 指纹而没有证书验证的设备。
+6. 吸收 ReadEra 标注导入、PDF 横向锁定、网页登录后剪藏、阅读/朗读修复和封面恢复。
+   封面缺失修复在完全同步的拉取阶段执行；正文仍按需下载，保留打开自动恢复和大小校验。
+7. 保留自建 Supabase 和多 provider 设置、S3 加密凭据回填，不恢复上游会员解锁环境开关。
+   本轮没有新增数据库迁移；数据库已到 024 的部署不需新增 SQL。仍低于 024 时使用上一轮
+   备份和 SSH/SCP 教程升级，不能跳过既有迁移要求。
+
+验证记录（候选构建前）：
+
+- TypeScript、Biome lint/格式通过；fork 脚本及平台分流契约 27 项通过。
+- CEF bundler 最小补丁对固定源文件 `git apply --check` 通过；helper 哈希通过。
+- 数据库基线/升级 SQL 生成与模拟 SSH/SCP 测试通过；未连接生产库。
+- Lua 语法与 347 项测试通过。Readest Rust fmt、Clippy 和 152 项单测通过。
+- LocalSend 辅助程序 fmt、Clippy 和 28 项单测通过；2 项真实进程协议集成测试单独执行通过。
+- Chromium 57 个文件、459 项通过、1 项预期跳过；standalone Web/API 生产构建通过。
+- 第一轮全量 Vitest：898 文件通过、2 文件失败、1 文件跳过；10894 项通过、2 失败、
+  10 跳过。失败是上游 Docker 测试仍要求会员解锁变量，以及新增 Android 更新测试
+  未适配 fork 签名清单/mock。已修正测试契约，不放宽实际验签或会员移除要求。
+- 最终全量复跑：900 个文件通过、1 个文件跳过；10896 项通过、10 项预期跳过、0 失败。
+
+候选合并提交 `a6add29f6b54fdaf667cdb84eb1058b7831e8f31` 已推送。
+[安装包 Actions 34445080492](https://github.com/caichang01/readest/actions/runs/34445080492)
+以 `publish_release=false` 运行，
+[Web/API Actions 34445079087](https://github.com/caichang01/readest/actions/runs/34445079087)
+自动启动。2026-09-18 实时核对：两者均已完成且成功，精确应用 SHA 均为上述提交。
+用户确认候选验收通过，并明确授权合并主分支、推送远端。本次以普通 merge commit
+合并，版本保持 `0.12.8`；主线推送后由现有 fork Actions 自动构建并按版本变化发布。
+本次整合只补充验收文档，不改变已验证应用代码；不重复运行同一代码的完整测试。
+正式主线构建及 Release 是否完成，应以合并后的 Actions 实时状态为准。
 
 ## 4. S3 跨设备“无法打开书籍”调查
 
