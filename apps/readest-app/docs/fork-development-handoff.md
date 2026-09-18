@@ -1057,6 +1057,13 @@ Android 初始化参数独立校验通过。审查未发现实现问题；已采
 整行的建议，防止 `platform-tools tools` 再次混入。未修改应用代码，复用上一轮应用
 全量与真机验收结果；本次仍需 hosted runner 验证实际 SDK 安装。
 
+修复提交 `dbf6beca2` 已推送；非发布候选 run
+[35308135731](https://github.com/caichang01/readest/actions/runs/35308135731)
+的 Android `Set up Android SDK` 和 `Install Android SDK packages` 均成功，原故障
+已在 hosted runner 验证消失，APK 与其他平台构建仍在进行。镜像 run
+[35308134085](https://github.com/caichang01/readest/actions/runs/35308134085) 已成功。
+候选全部完成前不合并或补发。本次由 Luna 实现，Astra 独立审查，root 集成与复核。
+
 候选构建、合并和正式 Release 的最终结果待验证后补充。由于版本
 仍为 0.12.8，修复合并本身不会触发版本变化发布；需在验证通过后使用既有
 `publish_release=true` 手动发布入口，不能只重跑旧 SHA 的失败任务。
